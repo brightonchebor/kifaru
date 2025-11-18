@@ -8,7 +8,16 @@ SECRET_KEY = "django-insecure-xyid0fm_gm8mddcap09umj4p=7vg)@j)o*1!)rnft^zi!ke^-m
 
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+]
+       
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://claude.ai",
+]       
 
 # CORS Settings - PRODUCTION SAFE
 CORS_ALLOW_ALL_ORIGINS = True
