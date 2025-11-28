@@ -1,8 +1,18 @@
 from pathlib import Path
 import os
 from datetime import timedelta
+import environ
+
+env = environ.Env(
+    # Set casting, default value
+    DEBUG = (bool, False)
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+environ.Env.read_env(BASE_DIR / '.env')
+
+
 
 SECRET_KEY = "django-insecure-xyid0fm_gm8mddcap09umj4p=7vg)@j)o*1!)rnft^zi!ke^-m"
 
@@ -10,6 +20,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
+    'kifaru2-production.up.railway.app',
     '127.0.0.1',
 ]
        
@@ -17,6 +28,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://claude.ai",
+    'https://kifaru2-production.up.railway.app',
 ]       
 
 # CORS Settings - PRODUCTION SAFE
@@ -48,6 +60,7 @@ CORS_ALLOW_METHODS = [
 ]
 
 INSTALLED_APPS = [
+    'jazzmin',
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -60,10 +73,12 @@ INSTALLED_APPS = [
     'whitenoise.runserver_nostatic',
     
     'users',
+    'properties',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -92,13 +107,26 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "core.wsgi.application"
 
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
+# DATABASES = {
+#     'default': {
+           
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': env('PG_NAME'),
+#         'USER': 'postgres',
+#         'PASSWORD': env('PG_PWD'),
+#         'HOST': 'shuttle.proxy.rlwy.net',
+#         'PORT': '59086'
+ 
+#     }
+# }
+
 
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -153,11 +181,29 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
     }
 
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT authorization using the Bearer scheme. Example: "Bearer {token}"'
+        }
+    },
+    'USE_SESSION_AUTH': False,
+    'JSON_EDITOR': True,
+    'VALIDATOR_URL': None,  
+    'OPERATIONS_SORTER': 'alpha',
+    'TAGS_SORTER': 'alpha',
+    'DEFAULT_MODEL_RENDERING': 'example', 
+}
+
 EMAIL_BACKEND = 'core.backends.email_backend.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
-# EMAIL_HOST_USER = env('EMAIL_HOST_USER')
-# DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
-# EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
+EMAIL_HOST_USER = 'cheborbrighton805@gmail.com'
+DEFAULT_FROM_EMAIL = 'cheborbrighton805@gmail.com'
+EMAIL_HOST_PASSWORD = 'kuszuvbxqepoawtj'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_USE_SSL = False
@@ -201,5 +247,5 @@ JAZZMIN_UI_TWEAKS = {
         "success": "btn-success"
     }
 }
-
+FRONTEND_URL = "http://localhost:5173"
 

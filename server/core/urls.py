@@ -18,11 +18,13 @@ schema_view = get_schema_view(
     public=True,
     permission_classes=(permissions.AllowAny,),
     authentication_classes=[],
+    # url='https://kifaru2-production.up.railway.app',
 )
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/user/', include('users.urls')),
+    path('api/', include('properties.urls')),
     
 
 

@@ -1,0 +1,153 @@
+from rest_framework import serializers
+from .models import User
+from django.contrib.auth import authenticate
+from rest_framework.exceptions import AuthenticationFailed
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import smart_str, smart_bytes, force_str
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.sites.shortcuts import get_current_site
+from django.urls import reverse
+from .utils import send_normal_email
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError
+from django.conf import settings  # Add this import
+
+
+class UserRegisterSerializer(serializers.ModelSerializer):
+
+    password = serializers.CharField(max_length=68, min_length=6, write_only=True)
+    password_confirm = serializers.CharField(max_length=68, min_length=6, write_only=True)
+
+    class Meta:
+
+        model = User
+        fields = ['id','email', 'first_name', 'last_name', 'password', 'password_confirm']
+
+    def validate(self, attr):
+
+        password = attr.get('password', '')
+        password_confirm = attr.get('password_confirm', '')
+        if password != password_confirm:
+            raise serializers.ValidationError('passwords do not match')
+        return attr
+
+    def create(self, validated_data):
+        
+        user = User.objects.create_user(
+            email = validated_data['email'],
+            first_name = validated_data['first_name'],
+            last_name = validated_data['last_name'],
+            password = validated_data['password']
+        )
+        return user
+    
+class LoginSerializer(serializers.Serializer):
+    id            = serializers.IntegerField(read_only=True)
+    first_name    = serializers.CharField(read_only=True)  # Fixed typo: was 'fist_name'
+    last_name     = serializers.CharField(read_only=True)
+    role          = serializers.CharField(read_only=True)
+    access_token  = serializers.CharField(read_only=True)
+    refresh_token = serializers.CharField(read_only=True)
+    email    = serializers.EmailField(max_length=255)
+    password = serializers.CharField(write_only=True, max_length=128)
+
+    def validate(self, attrs):
+        email    = attrs.get('email')
+        password = attrs.get('password')
+        user = authenticate(
+            request=self.context.get('request'),
+            email=email,
+            password=password
+        )
+
+        if not user:
+            raise AuthenticationFailed("Invalid credentials, try again.")
+        # if not user.is_verified:
+        #     raise AuthenticationFailed("Email is not verified.")
+
+        # Generate JWT tokens
+        tokens = user.tokens()
+
+        return {
+            'id':            user.pk,
+            'first_name':     user.first_name,
+            'last_name':     user.last_name,
+            'email': user.email,
+            'role':          user.role,
+            'access_token':  tokens['access'],
+            'refresh_token': tokens['refresh'],
+        }
+
+    def to_representation(self, validated_data):
+        return validated_data
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(max_length=255)
+
+    class Meta:
+        fields = ['email']
+
+    def validate(self, attrs):
+        email = attrs.get('email') 
+        if User.objects.filter(email=email).exists():
+            user = User.objects.get(email=email)
+            uidb64 = urlsafe_base64_encode(smart_bytes(user.id))
+            token = PasswordResetTokenGenerator().make_token(user)
+            
+            # Get frontend URL from settings
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+            
+            # Build the frontend reset link (matches React route /password-reset/:uidb64/:token)
+            reset_link = f"{frontend_url}/password-reset/{uidb64}/{token}/"
+            
+            email_body = f'Hi {user.first_name},\n\nUse the link below to reset your password:\n\n{reset_link}\n\nIf you did not request a password reset, please ignore this email.'
+            
+            data = {
+                'email_body': email_body,
+                'email_subject': 'Reset your password',
+                'to_email': user.email
+            }
+            send_normal_email(data)
+        return super().validate(attrs)   
+
+
+class SetNewPasswordSerializer(serializers.Serializer):
+    password = serializers.CharField(max_length=100, min_length=6, write_only=True)
+    password_confirm = serializers.CharField(max_length=100, min_length=6, write_only=True)
+    uidb64 = serializers.CharField(write_only=True)
+    token = serializers.CharField(write_only=True)
+
+    class Meta:
+        fields = ['password', 'password_confirm', 'uidb64', 'token']
+
+    def validate(self, attrs):
+        try:
+            password = attrs.get('password')
+            password_confirm = attrs.get('password_confirm')
+            uidb64 = attrs.get('uidb64')
+            token = attrs.get('token')
+
+            user_id = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(id=user_id)
+
+            if not PasswordResetTokenGenerator().check_token(user, token):
+                raise AuthenticationFailed('reset link is invalid or has expired', 401)
+            if password != password_confirm:
+                raise AuthenticationFailed('password does not match')
+        
+            user.set_password(password)
+            user.save()
+            return user
+        except Exception as e:
+            raise AuthenticationFailed('link is invalid or has expired')  # Fixed: was return, should be raise
+
+class UserListSerializer(serializers.ModelSerializer):
+    """serializer for adim user management"""
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 
+            'role', 'is_active', 'is_verified', 'is_staff',
+            'date_joined', 'last_login'
+        ]
+        read_only_fields = ['date_joined', 'last_login']
