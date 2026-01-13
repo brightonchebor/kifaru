@@ -15,18 +15,45 @@ class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
         ('admin', 'Admin'),
         ('staff', 'Staff'),
+        ('concierge', 'Concierge'),
+        ('property_manager', 'Property Manager'),
         ('external', 'External Client'),
     ]
+    
+    LANGUAGE_CHOICES = [
+        ('english', 'English'),
+        ('french', 'French'),
+        ('dutch', 'Dutch'),
+        ('swahili', 'Swahili'),
+    ]
+    
     email = models.EmailField(max_length=255, unique=True, verbose_name=_("Email Address"))
     first_name = models.CharField(max_length=100, verbose_name=_("First Name"))
     last_name = models.CharField(max_length=100, verbose_name=_("Last Name"))
+    phone_number = models.CharField(max_length=20, blank=True, verbose_name=_("Phone Number"))
+    whatsapp_number = models.CharField(max_length=20, blank=True, verbose_name=_("WhatsApp Number"))
+    
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(auto_now_add=True)
     last_login = models.DateTimeField(auto_now=True)
-    role = models.CharField(max_length=15 ,choices=ROLE_CHOICES, default='external', db_index=True)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='external', db_index=True)
+    
+    # Additional guest information
+    preferred_language = models.CharField(max_length=20, choices=LANGUAGE_CHOICES, default='english')
+    country_of_residence = models.CharField(max_length=100, blank=True)
+    is_returning_guest = models.BooleanField(default=False)
+    special_preferences = models.JSONField(default=dict, blank=True, help_text="Dietary, room preferences, etc.")
+    
+    # Staff property assignments
+    assigned_properties = models.ManyToManyField(
+        'properties.Property',
+        blank=True,
+        related_name='assigned_staff',
+        help_text="Properties this staff member is assigned to manage"
+    )
    
 
     USERNAME_FIELD = "email"

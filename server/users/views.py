@@ -8,7 +8,8 @@ from .serializers import (
     LoginSerializer,
     PasswordResetRequestSerializer,
     SetNewPasswordSerializer,
-    UserListSerializer
+    UserListSerializer,
+    UserStatsSerializer
 )
 from .models import User
 
@@ -104,22 +105,32 @@ class UserCreateView(generics.CreateAPIView):
 
 
 class UserStatsView(generics.GenericAPIView):
-    """Admin: Get user statistics"""
+    """
+    Admin: Get user statistics.
+    A simple serializer is provided so schema generation works.
+    """
     permission_classes = [IsAdminUser]
+    serializer_class = UserStatsSerializer
 
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
+        # During schema generation drf-yasg sets `swagger_fake_view` on the view —
+        # return a minimal response so schema generation can proceed.
+        if getattr(self, "swagger_fake_view", False):
+            return Response({}, status=status.HTTP_200_OK)
+
         total_users = User.objects.count()
         active_users = User.objects.filter(is_active=True).count()
         verified_users = User.objects.filter(is_verified=True).count()
-        
+
         users_by_role = {
             role[0]: User.objects.filter(role=role[0]).count()
             for role in User.ROLE_CHOICES
         }
-        
-        return Response({
-            'total_users': total_users,
-            'active_users': active_users,
-            'verified_users': verified_users,
-            'users_by_role': users_by_role,
-        }, status=status.HTTP_200_OK)
+
+        data = {
+            "total_users": total_users,
+            "active_users": active_users,
+            "verified_users": verified_users,
+            "users_by_role": users_by_role,
+        }
+        return Response(self.get_serializer(data).data, status=status.HTTP_200_OK)

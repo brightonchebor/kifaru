@@ -20,7 +20,10 @@ class UserRegisterSerializer(serializers.ModelSerializer):
     class Meta:
 
         model = User
-        fields = ['id','email', 'first_name', 'last_name', 'password', 'password_confirm']
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'phone_number', 'whatsapp_number',
+            'preferred_language', 'country_of_residence', 'password', 'password_confirm'
+        ]
 
     def validate(self, attr):
 
@@ -36,6 +39,10 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             email = validated_data['email'],
             first_name = validated_data['first_name'],
             last_name = validated_data['last_name'],
+            phone_number = validated_data.get('phone_number', ''),
+            whatsapp_number = validated_data.get('whatsapp_number', ''),
+            preferred_language = validated_data.get('preferred_language', 'english'),
+            country_of_residence = validated_data.get('country_of_residence', ''),
             password = validated_data['password']
         )
         return user
@@ -71,7 +78,12 @@ class LoginSerializer(serializers.Serializer):
             'id':            user.pk,
             'first_name':     user.first_name,
             'last_name':     user.last_name,
-            'email': user.email,
+            'email':         user.email,
+            'phone_number':  user.phone_number,
+            'whatsapp_number': user.whatsapp_number,
+            'preferred_language': user.preferred_language,
+            'country_of_residence': user.country_of_residence,
+            'is_returning_guest': user.is_returning_guest,
             'role':          user.role,
             'access_token':  tokens['access'],
             'refresh_token': tokens['refresh'],
@@ -141,13 +153,20 @@ class SetNewPasswordSerializer(serializers.Serializer):
             raise AuthenticationFailed('link is invalid or has expired')  # Fixed: was return, should be raise
 
 class UserListSerializer(serializers.ModelSerializer):
-    """serializer for adim user management"""
+    """serializer for admin user management"""
 
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'first_name', 'last_name', 
+            'id', 'email', 'first_name', 'last_name', 'phone_number', 'whatsapp_number',
+            'preferred_language', 'country_of_residence', 'is_returning_guest', 'special_preferences',
             'role', 'is_active', 'is_verified', 'is_staff',
             'date_joined', 'last_login'
         ]
-        read_only_fields = ['date_joined', 'last_login']
+        read_only_fields = ['date_joined', 'last_login', 'is_returning_guest']
+
+class UserStatsSerializer(serializers.Serializer):
+    total_users = serializers.IntegerField()
+    active_users = serializers.IntegerField()
+    verified_users = serializers.IntegerField()
+    users_by_role = serializers.DictField(child=serializers.IntegerField())
