@@ -24,9 +24,8 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     'kifaru2-production.up.railway.app',
-    # 'http://kifaru2-production.up.railway.app',
-    # 'https://kifaru2-production.up.railway.app',
     '127.0.0.1',
+    '144.172.93.6',
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -34,6 +33,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://claude.ai",
     'https://kifaru2-production.up.railway.app',
+    'http://144.172.93.6:8010',
 ]       
 
 # CORS Settings - PRODUCTION SAFE
