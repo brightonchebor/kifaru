@@ -1,0 +1,16 @@
+Django==5.0.8
+django_environ==0.11.2
+environ==1.0
+psycopg2-binary==2.9.10
+whitenoise==6.8.2
+pillow==11.0.0
+gunicorn==21.2.0
+django-jazzmin
+drf-yasg
+djangorestframework
+djangorestframework-simplejwt
+django-filter
+django-cors-headers>=4.0
+django-cloudinary-storage
+cloudinary
+
