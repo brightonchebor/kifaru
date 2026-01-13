@@ -2,6 +2,9 @@ from pathlib import Path
 import os
 from datetime import timedelta
 import environ
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 
 env = environ.Env(
     # Set casting, default value
@@ -21,9 +24,11 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     'kifaru2-production.up.railway.app',
+    # 'http://kifaru2-production.up.railway.app',
+    # 'https://kifaru2-production.up.railway.app',
     '127.0.0.1',
 ]
-       
+
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -71,9 +76,14 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'whitenoise.runserver_nostatic',
+    'cloudinary_storage',  
+    'cloudinary',  
     
     'users',
     'properties',
+    'payment',
+    'booking',
+    'content',
 ]
 
 MIDDLEWARE = [
@@ -107,12 +117,14 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "core.wsgi.application"
 
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
 
 # DATABASES = {
 #     'default': {
@@ -121,8 +133,8 @@ DATABASES = {
 #         'NAME': env('PG_NAME'),
 #         'USER': 'postgres',
 #         'PASSWORD': env('PG_PWD'),
-#         'HOST': 'shuttle.proxy.rlwy.net',
-#         'PORT': '59086'
+#         'HOST': 'gondola.proxy.rlwy.net',
+#         'PORT': '52610'
  
 #     }
 # }
@@ -156,7 +168,29 @@ USE_TZ = True
 TIME_ZONE  = "Africa/Nairobi"
 
 STATIC_URL = 'static/'
+
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Cloudinary Configuration
+cloudinary.config(
+    cloud_name=env('CLOUDINARY_CLOUD_NAME'),
+    api_key=env('CLOUDINARY_API_KEY'),
+    api_secret=env('CLOUDINARY_API_SECRET'),
+    secure=True
+)
+
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': env('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': env('CLOUDINARY_API_KEY'),
+    'API_SECRET': env('CLOUDINARY_API_SECRET')
+}
+
+
+# Use Cloudinary for media files
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
+# MEDIA_URL = '/media/' 
+
 
 # whitenoise
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
@@ -248,4 +282,13 @@ JAZZMIN_UI_TWEAKS = {
     }
 }
 FRONTEND_URL = "http://localhost:5173"
+# Frontend URL configuration
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+
+# Currency settings
+DEFAULT_CURRENCY = "EUR"
+
+# Time zone settings for multiple locations
+USE_TZ = True
+TIME_ZONE = "UTC"  # Can be customized per property in the frontend
 

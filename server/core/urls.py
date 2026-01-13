@@ -18,20 +18,22 @@ schema_view = get_schema_view(
     public=True,
     permission_classes=(permissions.AllowAny,),
     authentication_classes=[],
-    # url='https://kifaru2-production.up.railway.app',
+    url='https://kifaru2-production.up.railway.app',
 )
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/user/', include('users.urls')),
     path('api/', include('properties.urls')),
-    
-
+    path('api/', include('payment.urls')),
+    path('api/', include('booking.urls')),
+    path('api/', include('content.urls')),
+           
 
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
     path('docs/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
-]
+    path('re doc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
+]   
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
