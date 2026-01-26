@@ -19,6 +19,20 @@ import json
 
 
 class PropertyListCreateView(generics.ListCreateAPIView):
+    """
+    List all properties or create a new property.
+    
+    GET: Public endpoint - anyone can view properties
+        - Staff users only see their assigned properties
+        - Filtering: country, category, bedrooms, bathrooms, price range, min_guests
+        - Search: name, location, description
+        - Ordering: price, created_at, bedrooms, max_guests
+    
+    POST: Authenticated users only
+        - Handles multipart/form-data for image uploads
+        - Multiple property images via 'images' field
+        - Background image via 'background_image' field
+    """
     queryset = Property.objects.all().prefetch_related(
         'amenities', 'highlights', 'images', 'reviews', 'pricing_options',
         'features', 'contacts', 'network_from'
@@ -27,7 +41,7 @@ class PropertyListCreateView(generics.ListCreateAPIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'country', 'continent', 'property_category', 'bedrooms', 'bathrooms']
+    filterset_fields = ['country', 'property_category', 'bedrooms', 'bathrooms']
     search_fields = ['name', 'location', 'description']
     ordering_fields = ['price', 'created_at', 'bedrooms', 'max_guests']
     
@@ -84,6 +98,17 @@ class PropertyListCreateView(generics.ListCreateAPIView):
 
 
 class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a property by slug.
+    
+    GET: Public - anyone can view property details
+    PUT/PATCH: Authenticated users only
+        - Updates property, handles image uploads
+        - Replacing images deletes old ones
+    DELETE: Authenticated users only
+    
+    Lookup by: slug (e.g., /properties/kifaru-brussels/)
+    """
     queryset = Property.objects.all().prefetch_related(
         'amenities', 'highlights', 'images', 'reviews', 'pricing_options',
         'features', 'contacts', 'network_from'
@@ -130,6 +155,13 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class ReviewListCreateView(generics.ListCreateAPIView):
+    """
+    List all reviews or create a new review.
+    
+    GET: Public - view all reviews
+        - Filter by property: ?property=<property_id>
+    POST: Create new review for a property
+    """
     queryset = Review.objects. all()
     serializer_class = ReviewSerializer
     filter_backends = [DjangoFilterBackend]
@@ -137,6 +169,13 @@ class ReviewListCreateView(generics.ListCreateAPIView):
 
 
 class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a specific review.
+    
+    GET: View review details
+    PUT/PATCH: Update review
+    DELETE: Delete review
+    """
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
 
@@ -144,7 +183,15 @@ class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
 # Phase 2: Property Nested Resources CRUD
 
 class PropertyFeatureListCreateView(generics.ListCreateAPIView):
-    """List features for a property or create new feature (admin only)"""
+    """
+    List features for a property or create new feature.
+    
+    GET: Public - view all features for a property
+    POST: Admin only - create new feature for property
+    
+    URL: /properties/{slug}/features/
+    Example: Feature(icon='wifi', title='High-Speed WiFi', description='...')
+    """
     serializer_class = PropertyFeatureSerializer
     
     def get_permissions(self):
@@ -164,7 +211,15 @@ class PropertyFeatureListCreateView(generics.ListCreateAPIView):
 
 
 class PropertyFeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Get, update, or delete a property feature (admin only for modifications)"""
+    """
+    Retrieve, update, or delete a property feature.
+    
+    GET: Public - view feature details
+    PUT/PATCH: Admin only - update feature
+    DELETE: Admin only - delete feature
+    
+    URL: /properties/{slug}/features/{id}/
+    """
     serializer_class = PropertyFeatureSerializer
     
     def get_permissions(self):
@@ -173,13 +228,28 @@ class PropertyFeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
         return [AllowAny()]
     
     def get_queryset(self):
+        # Handle swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return PropertyFeature.objects.none()
+        
         property_slug = self.kwargs['property_slug']
         property_obj = get_object_or_404(Property, slug=property_slug)
         return PropertyFeature.objects.filter(property=property_obj)
 
 
 class PropertyPricingListCreateView(generics.ListCreateAPIView):
-    """List pricing options for a property or create new pricing (admin only)"""
+    """
+    List pricing options for a property or create new pricing.
+    
+    GET: Public - view all pricing tiers for a property
+        Returns pricing by: guest_type (local/foreign), stay_type (short/long/weekly),
+        accommodation_type (master_bedroom/full_apartment), number_of_guests
+    
+    POST: Admin only - create new pricing tier
+    
+    URL: /properties/{slug}/pricing/
+    Critical for booking price calculations.
+    """
     serializer_class = PropertyPricingSerializer
     
     def get_permissions(self):
@@ -199,7 +269,15 @@ class PropertyPricingListCreateView(generics.ListCreateAPIView):
 
 
 class PropertyPricingDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Get, update, or delete a property pricing option (admin only for modifications)"""
+    """
+    Retrieve, update, or delete a property pricing option.
+    
+    GET: Public - view specific pricing tier
+    PUT/PATCH: Admin only - update pricing
+    DELETE: Admin only - delete pricing tier
+    
+    URL: /properties/{slug}/pricing/{id}/
+    """
     serializer_class = PropertyPricingSerializer
     
     def get_permissions(self):
@@ -208,13 +286,25 @@ class PropertyPricingDetailView(generics.RetrieveUpdateDestroyAPIView):
         return [AllowAny()]
     
     def get_queryset(self):
+        # Handle swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return PropertyPricing.objects.none()
+        
         property_slug = self.kwargs['property_slug']
         property_obj = get_object_or_404(Property, slug=property_slug)
         return PropertyPricing.objects.filter(property=property_obj)
 
 
 class PropertyContactListCreateView(generics.ListCreateAPIView):
-    """List contacts for a property or create new contact (admin only)"""
+    """
+    List contacts for a property or create new contact.
+    
+    GET: Public - view all contacts (property managers, caretakers, etc.)
+    POST: Admin only - add new contact for property
+    
+    URL: /properties/{slug}/contacts/
+    Example: Contact(name='John Doe', role='Property Manager', phone='+123...')
+    """
     serializer_class = PropertyContactSerializer
     
     def get_permissions(self):
@@ -234,7 +324,15 @@ class PropertyContactListCreateView(generics.ListCreateAPIView):
 
 
 class PropertyContactDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Get, update, or delete a property contact (admin only for modifications)"""
+    """
+    Retrieve, update, or delete a property contact.
+    
+    GET: Public - view contact details
+    PUT/PATCH: Admin only - update contact
+    DELETE: Admin only - delete contact
+    
+    URL: /properties/{slug}/contacts/{id}/
+    """
     serializer_class = PropertyContactSerializer
     
     def get_permissions(self):
@@ -243,6 +341,10 @@ class PropertyContactDetailView(generics.RetrieveUpdateDestroyAPIView):
         return [AllowAny()]
     
     def get_queryset(self):
+        # Handle swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return PropertyContact.objects.none()
+        
         property_slug = self.kwargs['property_slug']
         property_obj = get_object_or_404(Property, slug=property_slug)
         return PropertyContact.objects.filter(property=property_obj)
@@ -251,7 +353,18 @@ class PropertyContactDetailView(generics.RetrieveUpdateDestroyAPIView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def check_availability(request, slug):
-    """Check if a property is available for specific dates"""
+    """
+    Check if a property is available for specific dates.
+    
+    POST: Public endpoint
+    Request body: {"start_date": "2026-03-01", "end_date": "2026-03-07"}
+    
+    Checks for overlapping pending/confirmed bookings.
+    Cancelled bookings don't block availability.
+    
+    Note: Prefer using /api/properties/{id}/availability/ (from booking app)
+    which is the canonical availability endpoint.
+    """
     try:
         property_obj = Property.objects.get(slug=slug)
     except Property.DoesNotExist:

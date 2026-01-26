@@ -30,7 +30,7 @@ class Property(models.Model):
     bathrooms = models.PositiveIntegerField(default=1)
     square_meters = models.PositiveIntegerField(null=True, blank=True)
     terrace_size = models.PositiveIntegerField(null=True, blank=True, help_text="Terrace size in square meters")
-    max_guests = models.PositiveIntegerField(default=2)
+    max_guests = models.PositiveIntegerField(null=True, blank=True)
     
     # Booking policies
     min_nights = models.PositiveIntegerField(default=1)
@@ -65,11 +65,14 @@ class Property(models.Model):
 
 class Amenity(models.Model):
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='amenities')
-    icon = models.CharField(max_length=50)
+    image = CloudinaryField("image")
     label = models.CharField(max_length=100)
     
     class Meta:
         verbose_name_plural = 'Amenities'
+    
+    def __str__(self):
+        return f"{self.property.name} - {self.label}"
 
 
 class Highlight(models.Model):
@@ -104,7 +107,6 @@ class PropertyPricing(models.Model):
     """Complex pricing structure for different accommodation types and guest types"""
     ACCOMMODATION_TYPE_CHOICES = [
         ('master_bedroom', 'Master Bedroom'),
-        ('single_bedroom', 'Single Bedroom'),
         ('full_apartment', 'Full Apartment'),
     ]
     
@@ -123,6 +125,7 @@ class PropertyPricing(models.Model):
     accommodation_type = models.CharField(max_length=20, choices=ACCOMMODATION_TYPE_CHOICES)
     guest_type = models.CharField(max_length=20, choices=GUEST_TYPE_CHOICES, default='international')
     stay_type = models.CharField(max_length=20, choices=STAY_TYPE_CHOICES)
+    number_of_guests = models.PositiveIntegerField(null=True, blank=True, help_text="Number of guests (if pricing varies by occupancy)")
     min_nights = models.PositiveIntegerField(default=1)
     max_nights = models.PositiveIntegerField(null=True, blank=True)
     price_per_night = models.DecimalField(max_digits=10, decimal_places=2, help_text="Price in EUR")

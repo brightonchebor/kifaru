@@ -9,7 +9,9 @@ from django.contrib.sites.shortcuts import get_current_site
 from django.urls import reverse
 from .utils import send_normal_email
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
-from django.conf import settings  # Add this import
+from django.conf import settings
+import phonenumbers
+from phonenumbers import geocoder
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
@@ -24,6 +26,48 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'last_name', 'phone_number', 'whatsapp_number',
             'preferred_language', 'country_of_residence', 'password', 'password_confirm'
         ]
+    
+    def validate_phone_number(self, value):
+        """Validate phone number format - must include country code"""
+        if not value:
+            return value
+            
+        if not value.startswith('+'):
+            raise serializers.ValidationError(
+                "Phone number must include country code (e.g., +254712345678, +32475123456)"
+            )
+        
+        try:
+            parsed = phonenumbers.parse(value, None)
+            if not phonenumbers.is_valid_number(parsed):
+                raise serializers.ValidationError("Invalid phone number")
+        except phonenumbers.NumberParseException:
+            raise serializers.ValidationError(
+                "Invalid phone number format. Use international format: +[country code][number]"
+            )
+        
+        return value
+    
+    def validate_whatsapp_number(self, value):
+        """Validate WhatsApp number format - must include country code"""
+        if not value:
+            return value
+            
+        if not value.startswith('+'):
+            raise serializers.ValidationError(
+                "WhatsApp number must include country code (e.g., +254712345678, +32475123456)"
+            )
+        
+        try:
+            parsed = phonenumbers.parse(value, None)
+            if not phonenumbers.is_valid_number(parsed):
+                raise serializers.ValidationError("Invalid WhatsApp number")
+        except phonenumbers.NumberParseException:
+            raise serializers.ValidationError(
+                "Invalid WhatsApp number format. Use international format: +[country code][number]"
+            )
+        
+        return value
 
     def validate(self, attr):
 
@@ -31,6 +75,20 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         password_confirm = attr.get('password_confirm', '')
         if password != password_confirm:
             raise serializers.ValidationError('passwords do not match')
+        
+        # Auto-detect country from phone number if not provided
+        phone_number = attr.get('phone_number', '')
+        country_of_residence = attr.get('country_of_residence', '')
+        
+        if phone_number and not country_of_residence:
+            try:
+                parsed = phonenumbers.parse(phone_number, None)
+                country = geocoder.description_for_number(parsed, "en")
+                if country:
+                    attr['country_of_residence'] = country
+            except:
+                pass  # If parsing fails, leave country empty
+        
         return attr
 
     def create(self, validated_data):
@@ -43,7 +101,8 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             whatsapp_number = validated_data.get('whatsapp_number', ''),
             preferred_language = validated_data.get('preferred_language', 'english'),
             country_of_residence = validated_data.get('country_of_residence', ''),
-            password = validated_data['password']
+            password = validated_data['password'],
+            is_verified = True
         )
         return user
     
@@ -92,6 +151,19 @@ class LoginSerializer(serializers.Serializer):
     def to_representation(self, validated_data):
         return validated_data
 
+class LogoutSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField()
+
+    def validate(self, attrs):
+        self.token = attrs['refresh_token']
+        return attrs
+
+    def save(self, **kwargs):
+        try:
+            RefreshToken(self.token).blacklist()
+        except TokenError:
+            raise serializers.ValidationError('Invalid or expired token')
+
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=255)
 
@@ -118,7 +190,14 @@ class PasswordResetRequestSerializer(serializers.Serializer):
                 'email_subject': 'Reset your password',
                 'to_email': user.email
             }
-            send_normal_email(data)
+            try:
+                send_normal_email(data)
+            except Exception as e:
+                # Log the error but don't fail the request
+                # This prevents exposing whether an email exists in the system
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to send password reset email: {str(e)}")
         return super().validate(attrs)   
 
 
@@ -151,6 +230,99 @@ class SetNewPasswordSerializer(serializers.Serializer):
             return user
         except Exception as e:
             raise AuthenticationFailed('link is invalid or has expired')  # Fixed: was return, should be raise
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    """Serializer for user profile - returns complete user information"""
+    assigned_properties = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'phone_number', 'whatsapp_number',
+            'preferred_language', 'country_of_residence', 'is_returning_guest', 'special_preferences',
+            'role', 'is_active', 'is_verified', 'assigned_properties',
+            'date_joined', 'last_login'
+        ]
+        read_only_fields = ['id', 'email', 'date_joined', 'last_login', 'is_returning_guest', 'role', 'is_active', 'is_verified']
+    
+    def validate_phone_number(self, value):
+        """Validate phone number format - must include country code"""
+        if not value:
+            return value
+            
+        if not value.startswith('+'):
+            raise serializers.ValidationError(
+                "Phone number must include country code (e.g., +254712345678, +32475123456)"
+            )
+        
+        try:
+            parsed = phonenumbers.parse(value, None)
+            if not phonenumbers.is_valid_number(parsed):
+                raise serializers.ValidationError("Invalid phone number")
+        except phonenumbers.NumberParseException:
+            raise serializers.ValidationError(
+                "Invalid phone number format. Use international format: +[country code][number]"
+            )
+        
+        return value
+    
+    def validate_whatsapp_number(self, value):
+        """Validate WhatsApp number format - must include country code"""
+        if not value:
+            return value
+            
+        if not value.startswith('+'):
+            raise serializers.ValidationError(
+                "WhatsApp number must include country code (e.g., +254712345678, +32475123456)"
+            )
+        
+        try:
+            parsed = phonenumbers.parse(value, None)
+            if not phonenumbers.is_valid_number(parsed):
+                raise serializers.ValidationError("Invalid WhatsApp number")
+        except phonenumbers.NumberParseException:
+            raise serializers.ValidationError(
+                "Invalid WhatsApp number format. Use international format: +[country code][number]"
+            )
+        
+        return value
+    
+    def validate(self, attrs):
+        """Auto-detect country from phone number if not provided"""
+        phone_number = attrs.get('phone_number')
+        country_of_residence = attrs.get('country_of_residence')
+        
+        # Only auto-detect if phone is being updated and country is empty
+        if phone_number and not country_of_residence:
+            # Check if user already has country set
+            if self.instance and self.instance.country_of_residence:
+                # Keep existing country
+                attrs['country_of_residence'] = self.instance.country_of_residence
+            else:
+                # Auto-detect from phone number
+                try:
+                    parsed = phonenumbers.parse(phone_number, None)
+                    country = geocoder.description_for_number(parsed, "en")
+                    if country:
+                        attrs['country_of_residence'] = country
+                except:
+                    pass  # If parsing fails, leave country empty
+        
+        return attrs
+    
+    def get_assigned_properties(self, obj):
+        """Return assigned properties for staff users"""
+        if obj.role == 'staff':
+            return [
+                {
+                    'id': prop.id,
+                    'name': prop.name,
+                    'slug': prop.slug,
+                    'location': prop.location
+                }
+                for prop in obj.assigned_properties.all()
+            ]
+        return []
 
 class UserListSerializer(serializers.ModelSerializer):
     """serializer for admin user management"""

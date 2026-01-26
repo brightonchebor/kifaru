@@ -9,7 +9,13 @@ import json
 class AmenitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Amenity
-        fields = ['icon', 'label']
+        fields = ['image', 'label']
+    
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        if instance.image:
+            rep['image'] = instance.image.url
+        return rep
 
 
 class HighlightSerializer(serializers.ModelSerializer):
@@ -43,7 +49,7 @@ class PropertyPricingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PropertyPricing
         fields = [
-            'id', 'accommodation_type', 'guest_type', 'stay_type',
+            'id', 'accommodation_type', 'guest_type', 'stay_type', 'number_of_guests',
             'min_nights', 'max_nights', 'price_per_night', 'weekly_price',
             'includes_breakfast', 'includes_fullboard'
         ]
@@ -75,7 +81,6 @@ class PropertyNetworkSerializer(serializers.ModelSerializer):
 
 class PropertySerializer(serializers.ModelSerializer):
     amenities = AmenitySerializer(many=True, required=False)
-    highlights = HighlightSerializer(many=True, required=False)
     images = PropertyImageSerializer(many=True, read_only=True)
     pricing_options = PropertyPricingSerializer(many=True, read_only=True)
     features = PropertyFeatureSerializer(many=True, read_only=True)
@@ -92,7 +97,7 @@ class PropertySerializer(serializers.ModelSerializer):
             'bedrooms', 'bathrooms', 'square_meters', 'terrace_size', 'max_guests',
             'min_nights', 'check_in_time', 'check_out_time', 'prepayment_percentage',
             'cancellation_days', 'background_image',
-            'wifi_password', 'amenities', 'highlights', 'images',
+            'wifi_password', 'amenities', 'images',
             'pricing_options', 'features', 'contacts', 'network_properties',
             'average_rating', 'created_at', 'updated_at'
         ]

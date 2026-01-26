@@ -6,10 +6,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .serializers import (
     UserRegisterSerializer,
     LoginSerializer,
+    LogoutSerializer,
     PasswordResetRequestSerializer,
     SetNewPasswordSerializer,
     UserListSerializer,
-    UserStatsSerializer
+    UserStatsSerializer,
+    UserProfileSerializer
 )
 from .models import User
 
@@ -36,6 +38,19 @@ class LoginView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+
+class LogoutView(generics.GenericAPIView):
+    serializer_class = LogoutSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({
+            'message': 'Logout successful.'
+        }, status=status.HTTP_200_OK)
 
 
 class PasswordResetRequestView(generics.GenericAPIView):
@@ -68,7 +83,7 @@ class SetNewPasswordView(generics.GenericAPIView):
 
 
 class UserDetailView(generics.RetrieveUpdateAPIView):
-    serializer_class = UserRegisterSerializer
+    serializer_class = UserProfileSerializer
     permission_classes = [IsAuthenticated]
     
     def get_object(self):

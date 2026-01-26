@@ -24,16 +24,20 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     'kifaru2-production.up.railway.app',
+    # 'http://kifaru2-production.up.railway.app',
+    # 'https://kifaru2-production.up.railway.app',
     '127.0.0.1',
-    '144.172.93.6',
+    'http://localhost:5173',
+    'https://kifaru-git-frontend-asgards-projects.vercel.app',
+    'https://kifaru-rust.vercel.app'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://claude.ai",
     'https://kifaru2-production.up.railway.app',
-    'http://144.172.93.6:8010',
+    'https://kifaru-git-frontend-asgards-projects.vercel.app',
+    'https://kifaru-rust.vercel.app'
 ]       
 
 # CORS Settings - PRODUCTION SAFE
@@ -118,26 +122,26 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
-
-
 # DATABASES = {
-#     'default': {
-           
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': env('PG_NAME'),
-#         'USER': 'postgres',
-#         'PASSWORD': env('PG_PWD'),
-#         'HOST': 'gondola.proxy.rlwy.net',
-#         'PORT': '52610'
- 
+#     "default": {
+#         "ENGINE": "django.db.backends.sqlite3",
+#         "NAME": BASE_DIR / "db.sqlite3",
 #     }
 # }
+
+
+DATABASES = {
+    'default': {
+           
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': env('PG_NAME'),
+        'USER': 'postgres',
+        'PASSWORD': env('PG_PWD'),
+        'HOST': 'gondola.proxy.rlwy.net',
+        'PORT': '52610'
+ 
+    }
+}
 
 
 
@@ -233,14 +237,21 @@ SWAGGER_SETTINGS = {
     'DEFAULT_MODEL_RENDERING': 'example', 
 }
 
-EMAIL_BACKEND = 'core.backends.email_backend.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_HOST_USER = 'cheborbrighton805@gmail.com'
-DEFAULT_FROM_EMAIL = 'cheborbrighton805@gmail.com'
-EMAIL_HOST_PASSWORD = 'kuszuvbxqepoawtj'
-EMAIL_PORT = 587
+# Email Configuration
+# Using Mailgun - Free tier: 100 emails/day (5000/month)
+# Sign up at: https://www.mailgun.com/
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.mailgun.org')
+EMAIL_PORT = env('EMAIL_PORT', default=587)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')  # Your Mailgun SMTP login
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')  # Your Mailgun SMTP password
 EMAIL_USE_TLS = True
 EMAIL_USE_SSL = False
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='Kifaru Impact <your-email@example.com>')
+
+# Resend API (disabled until domain is verified)
+RESEND_API_KEY = env('RESEND_API_KEY', default='')
 
 JAZZMIN_SETTINGS = {
     "site_title": "Event Management System",
@@ -281,14 +292,13 @@ JAZZMIN_UI_TWEAKS = {
         "success": "btn-success"
     }
 }
-FRONTEND_URL = "http://localhost:5173"
-# Frontend URL configuration
-FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+FRONTEND_URL ='https://kifaru-git-frontend-asgards-projects.vercel.app'
+
 
 # Currency settings
 DEFAULT_CURRENCY = "EUR"
 
 # Time zone settings for multiple locations
 USE_TZ = True
-TIME_ZONE = "UTC"  # Can be customized per property in the frontend
+TIME_ZONE = "Africa/Nairobi"  # Can be customized per property in the frontend
 

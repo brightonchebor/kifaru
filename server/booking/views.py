@@ -10,15 +10,29 @@ from .models import Booking
 from payment.models import Payment
 from .serializers import (
     BookingSerializer, 
-    BookingCreateSerializer,
+    BookingCreateRequestSerializer,
+    PriceCalculationSerializer,
 )
-from properties.models import Property
+from properties.models import Property, PropertyPricing
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from decimal import Decimal
+from django.db import models as django_models
 
 class BookingListCreateView(generics.ListCreateAPIView):
-    """List all bookings for authenticated user or create a new booking"""
-    serializer_class = BookingSerializer
+    """
+    List bookings (role-based) and create new bookings.
+    
+    GET: Returns bookings based on user role:
+        - Admin: All bookings from all users
+        - Staff: Bookings from their assigned properties only
+        - External users: Only their own bookings
+    
+    POST: Create a new booking with auto-filled user details
+    
+    Features: Filtering, search, ordering
+    Use /bookings/my-bookings/ for guaranteed personal bookings only
+    """
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'property']
@@ -26,9 +40,23 @@ class BookingListCreateView(generics.ListCreateAPIView):
     ordering_fields = ['created_at', 'check_in', 'total_amount']
     ordering = ['-created_at']
     
+    def get_serializer_class(self):
+        """Use different serializers for read vs write operations"""
+        if self.request.method == 'POST':
+            return BookingCreateRequestSerializer
+        return BookingSerializer
+    
     def get_queryset(self):
         """Return bookings based on user role"""
+        # Handle swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return Booking.objects.none()
+        
         user = self.request.user
+        
+        # Handle anonymous users
+        if not user.is_authenticated:
+            return Booking.objects.none()
         
         # Admin sees all bookings
         if user.role == 'admin':
@@ -43,13 +71,168 @@ class BookingListCreateView(generics.ListCreateAPIView):
         return Booking.objects.filter(user=user).select_related('property').prefetch_related('payment')
 
 
+class CalculatePriceView(APIView):
+    """
+    Preview booking price before creation.
+    
+    Returns calculated price based on:
+    - User's country (determines guest_type and pricing tier)
+    - Stay duration (short_term/long_term/weekly)
+    - Property and accommodation type
+    - Number of guests (affects pricing for some properties)
+    
+    Use this endpoint to show price preview to users before booking.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    @swagger_auto_schema(
+        operation_description="Calculate price for a potential booking based on user's country and booking details",
+        manual_parameters=[
+            openapi.Parameter('property', openapi.IN_QUERY, description="Property ID", type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('check_in', openapi.IN_QUERY, description="Check-in date (YYYY-MM-DD)", type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter('check_out', openapi.IN_QUERY, description="Check-out date (YYYY-MM-DD)", type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter('accommodation_type', openapi.IN_QUERY, description="Accommodation type", type=openapi.TYPE_STRING, required=True, enum=['master_bedroom', 'full_apartment']),
+            openapi.Parameter('number_of_guests', openapi.IN_QUERY, description="Number of guests", type=openapi.TYPE_INTEGER, required=False),
+        ],
+        responses={
+            200: PriceCalculationSerializer(),
+            400: 'Bad Request - Missing or invalid parameters',
+            404: 'Property not found or no pricing available'
+        }
+    )
+    def get(self, request):
+        # Get query parameters
+        property_id = request.query_params.get('property')
+        check_in = request.query_params.get('check_in')
+        check_out = request.query_params.get('check_out')
+        accommodation_type = request.query_params.get('accommodation_type')
+        number_of_guests = request.query_params.get('number_of_guests')
+        
+        # Validate required parameters
+        if not all([property_id, check_in, check_out, accommodation_type]):
+            return Response(
+                {'error': 'Missing required parameters: property, check_in, check_out, accommodation_type'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get property
+        try:
+            property_obj = Property.objects.get(id=property_id)
+        except Property.DoesNotExist:
+            return Response({'error': 'Property not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Parse dates
+        try:
+            check_in_date = datetime.strptime(check_in, '%Y-%m-%d').date()
+            check_out_date = datetime.strptime(check_out, '%Y-%m-%d').date()
+        except ValueError:
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Calculate total days
+        total_days = (check_out_date - check_in_date).days
+        if total_days <= 0:
+            return Response(
+                {'error': 'Check-out date must be after check-in date'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Determine stay_type
+        if total_days == 7:
+            stay_type = 'weekly'
+        elif total_days >= 10:
+            stay_type = 'long_term'
+        else:
+            stay_type = 'short_term'
+        
+        # Determine guest_type from user's country vs property's country
+        user = request.user
+        if user.country_of_residence and property_obj.country:
+            user_country = user.country_of_residence.lower()
+            property_country = property_obj.country.lower()
+            guest_type = 'local' if user_country == property_country else 'international'
+        else:
+            guest_type = 'international'  # Default
+        
+        # Find matching PropertyPricing
+        pricing_query = PropertyPricing.objects.filter(
+            property=property_obj,
+            accommodation_type=accommodation_type,
+            guest_type=guest_type,
+            stay_type=stay_type,
+            min_nights__lte=total_days
+        )
+        
+        # Filter by max_nights if specified
+        pricing_query = pricing_query.filter(
+            django_models.Q(max_nights__isnull=True) | django_models.Q(max_nights__gte=total_days)
+        )
+        
+        # Filter by number_of_guests if pricing has this field (for Marble Inn)
+        if number_of_guests:
+            pricing_with_guests = pricing_query.filter(number_of_guests=int(number_of_guests))
+            if pricing_with_guests.exists():
+                selected_pricing = pricing_with_guests.first()
+            else:
+                # Use pricing without guest restriction
+                selected_pricing = pricing_query.filter(number_of_guests__isnull=True).first()
+        else:
+            selected_pricing = pricing_query.filter(number_of_guests__isnull=True).first()
+        
+        if not selected_pricing:
+            return Response(
+                {'error': 'No pricing available for the selected criteria'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Calculate total amount
+        if total_days == 7 and selected_pricing.weekly_price:
+            total_amount = selected_pricing.weekly_price
+        else:
+            total_amount = selected_pricing.price_per_night * Decimal(str(total_days))
+        
+        # Build response
+        response_data = {
+            'guest_type': guest_type,
+            'stay_type': stay_type,
+            'price_per_night': selected_pricing.price_per_night,
+            'weekly_price': selected_pricing.weekly_price,
+            'total_nights': total_days,
+            'total_amount': total_amount,
+            'includes_breakfast': selected_pricing.includes_breakfast,
+            'includes_fullboard': selected_pricing.includes_fullboard,
+            'property_name': property_obj.name,
+            'accommodation_type': accommodation_type,
+        }
+        
+        serializer = PriceCalculationSerializer(response_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 class BookingDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update or delete a specific booking"""
+    """
+    Retrieve, update, or delete a specific booking.
+    
+    Permissions:
+    - User can access their own bookings
+    - Staff can access bookings from their assigned properties
+    - Admin can access all bookings
+    """
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        # Handle swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return Booking.objects.none()
+        
         user = self.request.user
+        
+        # Handle anonymous users
+        if not user.is_authenticated:
+            return Booking.objects.none()
         
         # Admin sees all bookings
         if user.role == 'admin':
@@ -64,150 +247,15 @@ class BookingDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Booking.objects.filter(user=user).select_related('property').prefetch_related('payment')
 
 
-class BookingCreateWithPaymentView(generics.GenericAPIView):
-    """Create a booking and process payment in one step"""
-    serializer_class = BookingCreateSerializer
-    permission_classes = [IsAuthenticated]
-    
-    @swagger_auto_schema(
-        operation_description="Create a booking and process payment in one step",
-        request_body=BookingCreateSerializer,
-        responses={
-            201: openapi.Response(
-                description="Booking created and payment processed successfully",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'message': openapi.Schema(type=openapi.TYPE_STRING),
-                        'booking': openapi.Schema(type=openapi.TYPE_OBJECT),
-                        'payment': openapi.Schema(type=openapi.TYPE_OBJECT),
-                    }
-                )
-            ),
-            400: "Bad Request - Payment failed or validation error"
-        }
-    )
-    def post(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        data = serializer.validated_data
-        property_obj = data['property']
-        
-        # Calculate booking details
-        check_in = data['check_in']
-        check_out = data['check_out']
-        total_days = (check_out - check_in).days
-        total_amount = property_obj.price * total_days
-        
-        # Create booking
-        booking = Booking.objects.create(
-            user=request.user,
-            property=property_obj,
-            full_name=data['full_name'],
-            email=data['email'],
-            phone=data['phone'],
-            check_in=check_in,
-            check_out=check_out,
-            guests=data['guests'],
-            total_days=total_days,
-            total_amount=total_amount,
-            notes=data.get('notes', ''),
-            status='pending'
-        )
-        
-        # Create payment
-        payment = Payment.objects.create(
-            booking=booking,
-            user=request.user,
-            payment_method=data['payment_method'],
-            amount=total_amount,
-            payment_status='processing'
-        )
-        
-        # Process payment based on method
-        payment_success = self._process_payment(payment, data)
-        
-        if payment_success:
-            payment.payment_status = 'completed'
-            payment.completed_at = timezone.now()
-            payment.save()
-            
-            booking.status = 'confirmed'
-            booking.save()
-            
-            # Update property status to booked
-            property_obj.status = 'booked'
-            property_obj.save()
-            
-            return Response({
-                'message': 'Booking created and payment processed successfully',
-                'booking': BookingSerializer(booking, context={'request': request}).data,
-                'payment': PaymentSerializer(payment).data
-            }, status=status.HTTP_201_CREATED)
-        else:
-            payment.payment_status = 'failed'
-            payment.failure_reason = 'Payment processing failed'
-            payment.save()
-            
-            return Response({
-                'message': 'Booking created but payment failed',
-                'booking': BookingSerializer(booking, context={'request': request}).data,
-                'payment': PaymentSerializer(payment).data
-            }, status=status.HTTP_400_BAD_REQUEST)
-    
-    def _process_payment(self, payment, data):
-        """
-        Simulate payment processing.
-        In production, integrate with actual payment gateways:
-        - Stripe/PayPal for card payments
-        - M-Pesa API for mobile money
-        - Bank API for bank transfers
-        """
-        payment_method = data['payment_method']
-        
-        if payment_method == 'card':
-            # Simulate card payment processing
-            card_number = data.get('card_number', '')
-            payment.card_number_last4 = card_number[-4:] if len(card_number) >= 4 else ''
-            payment.card_type = self._detect_card_type(card_number)
-            payment.save()
-            
-            # In production: Call Stripe/PayPal API
-            # For now, simulate success
-            return True
-            
-        elif payment_method == 'mpesa':
-            # Simulate M-Pesa payment
-            payment.mpesa_phone_number = data.get('mpesa_phone')
-            payment.mpesa_receipt_number = f"MPESA{timezone.now().strftime('%Y%m%d%H%M%S')}"
-            payment.save()
-            
-            # In production: Call M-Pesa API
-            return True
-            
-        elif payment_method == 'bank':
-            # Bank transfer - usually requires manual confirmation
-            payment.payment_status = 'pending'
-            payment.save()
-            return True
-        
-        return False
-    
-    def _detect_card_type(self, card_number):
-        """Detect card type from card number"""
-        if card_number.startswith('4'):
-            return 'Visa'
-        elif card_number.startswith(('51', '52', '53', '54', '55')):
-            return 'Mastercard'
-        elif card_number.startswith(('34', '37')):
-            return 'American Express'
-        return 'Unknown'
-
-
-
 class BookingCancelView(APIView):
-    """Cancel a booking"""
+    """
+    Cancel a booking and handle refunds.
+    
+    - Updates booking status to 'cancelled'
+    - Marks property as 'free' again
+    - Initiates payment refund if payment was completed
+    - Cannot cancel already completed bookings
+    """
     permission_classes = [IsAuthenticated]
     
     def post(self, request, pk):
@@ -255,7 +303,15 @@ class BookingCancelView(APIView):
 
 
 class UserBookingsView(generics.ListAPIView):
-    """Get all bookings for the authenticated user"""
+    """
+    Get personal bookings for the authenticated user.
+    
+    Always returns ONLY the current user's bookings, regardless of role.
+    Even admins/staff will only see their personal bookings here.
+    
+    Use this endpoint for "My Bookings" profile pages.
+    For admin/staff dashboards, use /bookings/ instead.
+    """
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.OrderingFilter]
@@ -267,7 +323,13 @@ class UserBookingsView(generics.ListAPIView):
 
 
 class PropertyAvailabilityView(APIView):
-    """Check availability of a property for specific dates"""
+    """
+    Check property availability for specific dates.
+    
+    Returns whether property is available and count of conflicting bookings.
+    Checks for overlapping pending/confirmed bookings only.
+    Cancelled bookings don't block availability.
+    """
     permission_classes = [IsAuthenticated]
     
     def get(self, request, property_id):
@@ -308,7 +370,17 @@ class PropertyAvailabilityView(APIView):
 
 # Admin Views
 class AdminBookingListView(generics.ListAPIView):
-    """Admin: View all bookings"""
+    """
+    Admin-only endpoint: View all bookings across all users and properties.
+    
+    Features:
+    - Filter by status, property, user
+    - Search by booking reference, name, email, user email
+    - Full ordering capabilities
+    
+    Note: Regular admins can also use /bookings/ which has the same access.
+    This endpoint is explicitly admin-only for stricter access control.
+    """
     queryset = Booking.objects.all().select_related('property', 'user').prefetch_related('payment')
     serializer_class = BookingSerializer
     permission_classes = [IsAdminUser]

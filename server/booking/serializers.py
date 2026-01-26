@@ -10,29 +10,62 @@ from django.utils import timezone
 
 
 
-class BookingSerializer(serializers.ModelSerializer):
-    property_details = PropertySerializer(source='property', read_only=True)
-    payment = PaymentSerializer(read_only=True)
-    property_name = serializers.CharField(source='property.name', read_only=True)
-    property_location = serializers.CharField(source='property.location', read_only=True)
-    
+class BookingCreateRequestSerializer(serializers.ModelSerializer):
+    """Serializer for creating bookings - only writable fields"""
     class Meta:
         model = Booking
         fields = [
-            'id', 'booking_reference', 'user', 'property', 'property_details',
-            'property_name', 'property_location', 'full_name', 'email', 'phone',
-            'accommodation_type', 'guest_type', 'check_in', 'check_out', 'guests',
-            'number_of_adults', 'number_of_children', 'total_days', 'total_amount',
-            'includes_breakfast', 'includes_fullboard', 'dog_included', 'jacuzzi_reservation',
-            'status', 'special_requests', 'payment',
-            'created_at', 'updated_at'
+            'property', 'accommodation_type', 'check_in', 'check_out',
+            'number_of_guests', 'number_of_adults', 'number_of_children',
+            'dog_included', 'jacuzzi_reservation', 'special_requests'
         ]
-        read_only_fields = ['booking_reference', 'total_days', 'total_amount', 'user', 'created_at', 'updated_at']
     
     def validate(self, data):
         check_in = data.get('check_in')
         check_out = data.get('check_out')
         property_obj = data.get('property')
+        accommodation_type = data.get('accommodation_type')
+        number_of_guests = data.get('number_of_guests')
+        number_of_adults = data.get('number_of_adults')
+        number_of_children = data.get('number_of_children')
+        dog_included = data.get('dog_included', False)
+        
+        # Validate user has country_of_residence set
+        user = self.context['request'].user
+        if not user.country_of_residence:
+            raise serializers.ValidationError(
+                "Please add your country of residence to your profile before booking. "
+                "This is required to determine the correct pricing."
+            )
+        
+        # Validate user has phone number
+        if not user.phone_number:
+            raise serializers.ValidationError(
+                "Please add your phone number to your profile before booking."
+            )
+        
+        # Validate guest numbers match
+        if number_of_adults and number_of_children:
+            if number_of_adults + number_of_children != number_of_guests:
+                raise serializers.ValidationError(
+                    f"Number of adults ({number_of_adults}) + children ({number_of_children}) "
+                    f"must equal total guests ({number_of_guests})."
+                )
+        
+        # Validate against property max_guests
+        if property_obj and property_obj.max_guests and number_of_guests:
+            if number_of_guests > property_obj.max_guests:
+                raise serializers.ValidationError(
+                    f"This property has a maximum capacity of {property_obj.max_guests} guest(s). "
+                    f"You requested {number_of_guests} guest(s)."
+                )
+        
+        # Validate dog only allowed for North Sea property
+        if dog_included and property_obj:
+            if 'North-Sea' not in property_obj.name:
+                raise serializers.ValidationError(
+                    "Dogs are only allowed at Ocean Kifaru North-Sea property."
+                )
         
         # Validate dates
         if check_in and check_out:
@@ -70,66 +103,60 @@ class BookingSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
-        # Set user from request context
-        validated_data['user'] = self.context['request'].user
+        # Auto-fill user info from authenticated user profile
+        user = self.context['request'].user
+        validated_data['user'] = user
+        validated_data['full_name'] = user.get_full_name
+        validated_data['email'] = user.email
+        validated_data['phone'] = user.phone_number
         return super().create(validated_data)
 
 
-class BookingCreateSerializer(serializers.Serializer):
-    """Simplified serializer for creating a booking with payment"""
-    property_id = serializers.IntegerField()
-    full_name = serializers.CharField(max_length=200)
-    email = serializers.EmailField()
-    phone = serializers.CharField(max_length=20)
-    accommodation_type = serializers.ChoiceField(choices=['master_bedroom', 'single_bedroom', 'full_apartment'])
-    guest_type = serializers.ChoiceField(choices=['international', 'local'], default='international')
-    check_in = serializers.DateField()
-    check_out = serializers.DateField()
-    guests = serializers.IntegerField(min_value=1)
-    number_of_adults = serializers.IntegerField(min_value=1, default=1)
-    number_of_children = serializers.IntegerField(min_value=0, default=0)
-    special_requests = serializers.CharField(required=False, allow_blank=True)
-    dog_included = serializers.BooleanField(default=False)
-    jacuzzi_reservation = serializers.BooleanField(default=False)
+class BookingSerializer(serializers.ModelSerializer):
+    """Complete serializer for reading bookings - includes all calculated fields"""
+    property_details = PropertySerializer(source='property', read_only=True)
+    payment = PaymentSerializer(read_only=True)
+    property_name = serializers.CharField(source='property.name', read_only=True)
+    property_location = serializers.CharField(source='property.location', read_only=True)
+    pricing_breakdown = serializers.SerializerMethodField()
     
-    # Payment details
-    payment_method = serializers.ChoiceField(choices=['card', 'bank_transfer', 'mpesa', 'paypal'])
+    class Meta:
+        model = Booking
+        fields = [
+            'id', 'booking_reference', 'user', 'property', 'property_details',
+            'property_name', 'property_location', 'full_name', 'email', 'phone',
+            'accommodation_type', 'guest_type', 'stay_type', 'check_in', 'check_out',
+            'number_of_guests', 'number_of_adults', 'number_of_children',
+            'total_days', 'total_amount', 'selected_pricing', 'pricing_breakdown',
+            'includes_breakfast', 'includes_fullboard', 'dog_included', 'jacuzzi_reservation',
+            'status', 'special_requests', 'payment',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'booking_reference', 'total_days', 'total_amount', 'user', 'stay_type', 'selected_pricing', 'includes_breakfast', 'includes_fullboard', 'created_at', 'updated_at', 'property_details', 'payment', 'property_name', 'property_location', 'pricing_breakdown']
     
-    # Card payment fields
-    card_number = serializers.CharField(max_length=19, required=False)
-    card_expiry = serializers.CharField(max_length=7, required=False)  # MM/YY
-    card_cvv = serializers.CharField(max_length=4, required=False)
-    
-    # M-Pesa fields
-    mpesa_phone = serializers.CharField(max_length=15, required=False)
-    
-    def validate(self, data):
-        # Validate property exists
-        try:
-            property_obj = Property.objects.get(id=data['property_id'])
-            data['property'] = property_obj
-        except Property.DoesNotExist:
-            raise serializers.ValidationError("Property does not exist.")
-        
-        # Validate dates
-        check_in = data['check_in']
-        check_out = data['check_out']
-        
-        if check_in >= check_out:
-            raise serializers.ValidationError("Check-out date must be after check-in date.")
-        
-        if check_in < timezone.now().date():
-            raise serializers.ValidationError("Check-in date cannot be in the past.")
-        
-        # Validate payment method specific fields
-        if data['payment_method'] == 'card':
-            if not all([data.get('card_number'), data.get('card_expiry'), data.get('card_cvv')]):
-                raise serializers.ValidationError("Card payment requires card_number, card_expiry, and card_cvv.")
-        
-        if data['payment_method'] == 'mpesa':
-            if not data.get('mpesa_phone'):
-                raise serializers.ValidationError("M-Pesa payment requires mpesa_phone.")
-        
-        return data
+    def get_pricing_breakdown(self, obj):
+        """Return detailed pricing information"""
+        if obj.selected_pricing:
+            return {
+                'price_per_night': str(obj.selected_pricing.price_per_night),
+                'weekly_price': str(obj.selected_pricing.weekly_price) if obj.selected_pricing.weekly_price else None,
+                'total_nights': obj.total_days,
+                'total_amount': str(obj.total_amount),
+                'includes_breakfast': obj.includes_breakfast,
+                'includes_fullboard': obj.includes_fullboard,
+            }
+        return None
 
+class PriceCalculationSerializer(serializers.Serializer):
+    """Serializer for pricing calculation response"""
+    guest_type = serializers.CharField()
+    stay_type = serializers.CharField()
+    price_per_night = serializers.DecimalField(max_digits=10, decimal_places=2)
+    weekly_price = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
+    total_nights = serializers.IntegerField()
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    includes_breakfast = serializers.BooleanField()
+    includes_fullboard = serializers.BooleanField()
+    property_name = serializers.CharField()
+    accommodation_type = serializers.CharField()
 

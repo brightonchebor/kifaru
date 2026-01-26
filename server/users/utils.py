@@ -29,11 +29,74 @@ def send_code_to_user(email):
 """
 
 def send_normal_email(data):
-    email = EmailMessage(
-        subject=data['email_subject'],
-        body=data['email_body'],
-        from_email=settings.EMAIL_HOST_USER,
-        to=[data['to_email']]
-    )
-    email.send()
+    """
+    Send email using Mailgun API (bypasses Django's email backend and SMTP issues).
+    """
+    import logging
+    import requests
+    import os
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info(f"Attempting to send email to {data['to_email']} via Mailgun API")
+        
+        # Get Mailgun credentials from environment
+        api_key = os.getenv('MAILGUN_API_KEY')
+        domain = os.getenv('MAILGUN_DOMAIN')
+        
+        if not api_key or not domain:
+            raise Exception("MAILGUN_API_KEY or MAILGUN_DOMAIN not set in .env")
+        
+        # Mailgun API endpoint (US region)
+        url = f"https://api.mailgun.net/v3/{domain}/messages"
+        
+        logger.info(f"Mailgun URL: {url}")
+        logger.info(f"Using API key: {api_key[:20]}...")
+        
+        # Send email via Mailgun API
+        response = requests.post(
+            url,
+            auth=("api", api_key),
+            data={
+                "from": f"Kifaru Impact <postmaster@{domain}>",
+                "to": [data['to_email']],
+                "subject": data['email_subject'],
+                "text": data['email_body']
+            }
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"Email sent successfully via Mailgun API. ID: {result.get('id')}")
+        else:
+            logger.error(f"Mailgun API error: {response.status_code} - {response.text}")
+            raise Exception(f"Mailgun failed: {response.text}")
+        
+    except Exception as e:
+        logger.error(f"Email sending failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"Full error details:", exc_info=True)
+        raise
+        
+        response = requests.post(
+            url,
+            auth=("api", api_key),
+            data={
+                "from": from_email,
+                "to": [data['to_email']],
+                "subject": data['email_subject'],
+                "text": data['email_body']
+            }
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"Email sent successfully via Mailgun. ID: {response.json().get('id')}")
+        else:
+            logger.error(f"Mailgun API error: {response.status_code} - {response.text}")
+            raise Exception(f"Mailgun failed: {response.text}")
+        
+    except Exception as e:
+        logger.error(f"Email sending failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"Full error details:", exc_info=True)
+        raise
 

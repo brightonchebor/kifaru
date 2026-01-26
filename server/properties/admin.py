@@ -8,6 +8,14 @@ from .models import (
 class AmenityInline(admin.TabularInline):
     model = Amenity
     extra = 1
+    readonly_fields = ('image_preview',)
+    
+    def image_preview(self, instance):
+        if instance.image:
+            return f'<img src="{instance.image.url}" style="height: 50px;" />'
+        return ''
+    image_preview.allow_tags = True
+    image_preview.short_description = 'Preview'
 
 
 class HighlightInline(admin.TabularInline):
@@ -68,6 +76,21 @@ class PropertyAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(Amenity)
+class AmenityAdmin(admin.ModelAdmin):
+    list_display = ['label', 'property', 'image_preview']
+    list_filter = ['property']
+    search_fields = ['label', 'property__name']
+    readonly_fields = ('image_preview',)
+    
+    def image_preview(self, instance):
+        if instance.image:
+            return f'<img src="{instance.image.url}" style="height: 50px;" />'
+        return ''
+    image_preview.allow_tags = True
+    image_preview.short_description = 'Image'
 
 
 @admin.register(PropertyPricing)
