@@ -11,6 +11,8 @@ from .views import (
     PropertyContactListCreateView,
     PropertyContactDetailView,
     check_availability,
+    GalleryListView,
+    GalleryDetailView,
 )
 
 app_name = 'properties'
@@ -32,4 +34,8 @@ urlpatterns = [
     # Reviews
     path('reviews/', ReviewListCreateView.as_view(), name='review-list'),
     path('reviews/<int:pk>/', ReviewDetailView.as_view(), name='review-detail'),
+    
+    # Gallery
+    path('gallery/', GalleryListView.as_view(), name='gallery-list'),
+    path('gallery/<int:pk>/', GalleryDetailView.as_view(), name='gallery-detail'),
 ]

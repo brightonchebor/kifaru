@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from .serializers import (
     UserRegisterSerializer,
@@ -102,6 +103,7 @@ class UserListView(generics.ListAPIView):
     search_fields = ['email', 'first_name', 'last_name']
     ordering_fields = ['date_joined', 'last_login']
     ordering = ['-date_joined']
+    pagination_class = PageNumberPagination
 
 
 class UserManageView(generics.RetrieveUpdateDestroyAPIView):

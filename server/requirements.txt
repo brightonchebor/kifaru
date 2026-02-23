@@ -17,3 +17,4 @@ cloudinary
 resend
 sib-api-v3-sdk
 phonenumbers
+paystackapi

@@ -3,16 +3,18 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
+from django.db.models import Avg, Prefetch
 from .models import (
     Property, PropertyImage, Review,
-    PropertyFeature, PropertyPricing, PropertyContact
+    PropertyFeature, PropertyPricing, PropertyContact, Gallery
 )
 from .serializers import (
     PropertySerializer, ReviewSerializer,
     PropertyFeatureSerializer,
-    PropertyPricingSerializer, PropertyContactSerializer
+    PropertyPricingSerializer, PropertyContactSerializer, GallerySerializer
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 import json
@@ -33,17 +35,29 @@ class PropertyListCreateView(generics.ListCreateAPIView):
         - Multiple property images via 'images' field
         - Background image via 'background_image' field
     """
-    queryset = Property.objects.all().prefetch_related(
-        'amenities', 'highlights', 'images', 'reviews', 'pricing_options',
-        'features', 'contacts', 'network_from'
+    
+    queryset = Property.objects.all().select_related().prefetch_related(
+        'amenities',
+        'images',
+        Prefetch('reviews', queryset=Review.objects.only('rating', 'property')),
+        'pricing_options',
+        'features',
+        'contacts'
+    ).annotate(
+        average_rating=Avg('reviews__rating')
     )
     serializer_class = PropertySerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['country', 'property_category', 'bedrooms', 'bathrooms']
     search_fields = ['name', 'location', 'description']
     ordering_fields = ['price', 'created_at', 'bedrooms', 'max_guests']
+    
+    def get_permissions(self):
+        """Only admin/staff can create properties, everyone can view"""
+        if self.request.method == 'POST':
+            return [IsAdminUser()]
+        return [AllowAny()]
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -70,29 +84,12 @@ class PropertyListCreateView(generics.ListCreateAPIView):
         return queryset
 
     def post(self, request, *args, **kwargs):
-        data = request.data. copy()  # QueryDict -> mutable
-        # If frontend sent nested fields as JSON strings (multipart), parse them
-        for field in ('amenities', 'highlights'):
-            if field in data and isinstance(data.get(field), str):
-                try:
-                    data[field] = json.loads(data.get(field))
-                except Exception:
-                    return Response({'detail': f'{field} must be valid JSON.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        serializer = self.get_serializer(data=data)
+        # Serializer handles JSON parsing in to_internal_value()
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        # Handle background_image upload
-        background_image = request.FILES.get('background_image')
-        if background_image:
-            prop = serializer.save(background_image=background_image)
-        else:
-            prop = serializer.save()
-
-        # handle uploaded files: multiple images under key "images"
-        images = request.FILES.getlist('images')
-        for idx, img in enumerate(images):
-            PropertyImage.objects.create(property=prop, image=img, order=idx)
+        # Let the serializer handle everything (nested data + images)
+        prop = serializer.save()
 
         return Response(self.get_serializer(prop, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
@@ -102,10 +99,10 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
     Retrieve, update, or delete a property by slug.
     
     GET: Public - anyone can view property details
-    PUT/PATCH: Authenticated users only
+    PUT/PATCH: Admin only
         - Updates property, handles image uploads
         - Replacing images deletes old ones
-    DELETE: Authenticated users only
+    DELETE: Admin only
     
     Lookup by: slug (e.g., /properties/kifaru-brussels/)
     """
@@ -115,8 +112,13 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
     )
     serializer_class = PropertySerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    permission_classes = [IsAuthenticatedOrReadOnly]
     lookup_field = 'slug'
+    
+    def get_permissions(self):
+        """Only admin can update/delete properties, everyone can view"""
+        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
+            return [IsAdminUser()]
+        return [AllowAny()]
 
     def put(self, request, *args, **kwargs):
         return self._update(request, partial=False)
@@ -127,7 +129,7 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
     def _update(self, request, partial):
         instance = self.get_object()
         data = request.data.copy()
-        for field in ('amenities', 'highlights'):
+        for field in ('amenities', 'highlights', 'pricing_options', 'features', 'contacts'):
             if field in data and isinstance(data. get(field), str):
                 try:
                     data[field] = json.loads(data. get(field))
@@ -137,19 +139,8 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
         serializer = self.get_serializer(instance, data=data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
-        # Handle background_image upload
-        background_image = request.FILES.get('background_image')
-        if background_image:
-            prop = serializer.save(background_image=background_image)
-        else:
-            prop = serializer.save()
-
-        # If images uploaded, replace existing images
-        images = request.FILES.getlist('images')
-        if images:
-            prop.images.all(). delete()
-            for idx, img in enumerate(images):
-                PropertyImage.objects.create(property=prop, image=img, order=idx)
+        # Let the serializer handle everything (nested data + images)
+        prop = serializer.save()
 
         return Response(self.get_serializer(prop, context={'request': request}).data)
 
@@ -166,6 +157,7 @@ class ReviewListCreateView(generics.ListCreateAPIView):
     serializer_class = ReviewSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['property']
+    pagination_class = PageNumberPagination
 
 
 class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -409,3 +401,44 @@ def check_availability(request, slug):
         'message': 'Available' if is_available else 'Not available for selected dates'
     })
     serializer_class = ReviewSerializer
+
+
+class GalleryListView(generics.ListCreateAPIView):
+    """
+    GET: Anyone can view active gallery images
+        - Only returns active images for public
+        - Optional filtering by category via query param: ?category=lifestyle
+    
+    POST: Admin only - create new gallery image
+        - Upload image file with metadata (title, category, order, etc.)
+    """
+    serializer_class = GallerySerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['category', 'is_featured']
+    
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAdminUser()]
+    
+    def get_queryset(self):
+        # Admin sees all, public sees only active
+        if self.request.user.is_staff:
+            return Gallery.objects.all()
+        return Gallery.objects.filter(is_active=True)
+
+
+class GalleryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET: Anyone can view single gallery image
+    PUT/PATCH: Admin only - update gallery image
+    DELETE: Admin only - delete gallery image
+    """
+    serializer_class = GallerySerializer
+    queryset = Gallery.objects.all()
+    lookup_field = 'pk'
+    
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAdminUser()]

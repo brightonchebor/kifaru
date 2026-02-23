@@ -24,7 +24,7 @@ class Payment(models.Model):
     
     # Relationships
     booking = models.OneToOneField(Booking, on_delete=models.CASCADE, related_name='payment')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments', null=True, blank=True, help_text="User account if payment was made by authenticated user")
     
     # Payment details
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
@@ -47,6 +47,11 @@ class Payment(models.Model):
     # M-Pesa specific fields
     mpesa_receipt_number = models.CharField(max_length=100, blank=True, null=True)
     mpesa_phone_number = models.CharField(max_length=15, blank=True, null=True)
+    
+    # Paystack specific fields
+    paystack_reference = models.CharField(max_length=100, blank=True, null=True, unique=True, help_text="Paystack transaction reference")
+    paystack_access_code = models.CharField(max_length=100, blank=True, null=True, help_text="Paystack access code")
+    authorization_url = models.URLField(blank=True, null=True, help_text="Paystack payment URL")
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

@@ -2,6 +2,9 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from properties.models import Property, PropertyPricing
 from decimal import Decimal
+from django.core.exceptions import ValidationError
+import phonenumbers
+from phonenumbers import geocoder
 
 User = get_user_model()
 
@@ -34,14 +37,15 @@ class Booking(models.Model):
     booking_reference = models.CharField(max_length=50, unique=True, blank=True)
     
     # Relationships
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookings')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookings', null=True, blank=True, help_text="User account if booking was made by authenticated user")
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='bookings')
     selected_pricing = models.ForeignKey(PropertyPricing, on_delete=models.PROTECT, null=True, blank=True, help_text="Selected pricing option")
     
-    # Personal details
+    # Personal details (required for all bookings, whether guest or authenticated)
     full_name = models.CharField(max_length=200)
     email = models.EmailField()
     phone = models.CharField(max_length=20)
+    id_passport_number = models.CharField(max_length=50, blank=True, help_text="ID or Passport number for verification")
     
     # Booking details
     accommodation_type = models.CharField(max_length=20, choices=ACCOMMODATION_TYPE_CHOICES, default='full_apartment')
@@ -75,7 +79,8 @@ class Booking(models.Model):
         ordering = ['-created_at']
         
     def __str__(self):
-        return f"{self.booking_reference} - {self.user.email}"
+        user_email = self.user.email if self.user else "No User"
+        return f"{self.booking_reference} - {user_email}"
     
     def save(self, *args, **kwargs):
         # Generate booking reference if not exists
@@ -93,7 +98,26 @@ class Booking(models.Model):
             self.total_days = delta.days
         
         # Determine stay type based on total_days if not set
-        if not self.stay_type and self.total_days:
+        if not self.stay_type and self.total_days and self.property:
+            # Check if property has weekly pricing and if nights is a multiple of 7
+            has_weekly_pricing = PropertyPricing.objects.filter(
+                property=self.property,
+                accommodation_type=self.accommodation_type,
+                stay_type='weekly'
+            ).exists()
+            
+            if self.total_days % 7 == 0 and has_weekly_pricing:
+                # Multiples of 7 (7, 14, 21, 28...) use weekly pricing if available
+                self.stay_type = 'weekly'
+            elif self.total_days >= 10:
+                self.stay_type = 'long_term'
+            elif self.total_days < 7:
+                self.stay_type = 'short_term'
+            else:
+                # 8 or 9 nights - check what's available
+                self.stay_type = 'short_term'
+        elif not self.stay_type and self.total_days:
+            # Fallback if no property context
             if self.total_days == 7:
                 self.stay_type = 'weekly'
             elif self.total_days >= 10:
@@ -111,38 +135,75 @@ class Booking(models.Model):
                 self.guest_type = 'local'
             else:
                 self.guest_type = 'international'
+        elif not self.guest_type and self.phone and self.property:
+            # For guest bookings, determine from phone number
+            try:
+                parsed = phonenumbers.parse(self.phone, None)
+                if not phonenumbers.is_valid_number(parsed):
+                    raise ValidationError({
+                        'phone': 'Please provide a valid phone number with country code (e.g., +254712345678).'
+                    })
+                
+                phone_country = geocoder.description_for_number(parsed, "en")
+                if phone_country:
+                    property_country = self.property.country.lower()
+                    if phone_country.lower() == property_country:
+                        self.guest_type = 'local'
+                    else:
+                        self.guest_type = 'international'
+                else:
+                    self.guest_type = 'international'
+            except phonenumbers.NumberParseException:
+                raise ValidationError({
+                    'phone': 'Invalid phone number format. Please include country code (e.g., +254712345678).'
+                })
         elif not self.guest_type:
-            # Default to international if no country set
+            # Fallback default
             self.guest_type = 'international'
         
         # Find matching PropertyPricing if not already selected
         if not self.selected_pricing and self.property:
+            # Try specific guest_type first
             pricing = PropertyPricing.objects.filter(
                 property=self.property,
                 accommodation_type=self.accommodation_type,
                 guest_type=self.guest_type,
                 stay_type=self.stay_type,
                 min_nights__lte=self.total_days
-            )
-            
-            # Filter by max_nights if specified
-            pricing = pricing.filter(
+            ).filter(
                 models.Q(max_nights__isnull=True) | models.Q(max_nights__gte=self.total_days)
             )
             
-            # Filter by number_of_guests if pricing has this field (for Marble Inn)
-            pricing_with_guests = pricing.filter(number_of_guests=self.number_of_guests)
-            if pricing_with_guests.exists():
-                self.selected_pricing = pricing_with_guests.first()
+            # If not found, try 'all'
+            if not pricing.exists():
+                pricing = PropertyPricing.objects.filter(
+                    property=self.property,
+                    accommodation_type=self.accommodation_type,
+                    guest_type='all',
+                    stay_type=self.stay_type,
+                    min_nights__lte=self.total_days
+                ).filter(
+                    models.Q(max_nights__isnull=True) | models.Q(max_nights__gte=self.total_days)
+                )
+            
+            # Filter by number_of_guests - find pricing where capacity >= requested guests
+            pricing_with_capacity = pricing.filter(
+                models.Q(number_of_guests__gte=self.number_of_guests) | 
+                models.Q(number_of_guests__isnull=True)
+            ).order_by('number_of_guests').first()  # Prefer smallest capacity that fits
+            
+            if pricing_with_capacity:
+                self.selected_pricing = pricing_with_capacity
             else:
-                # Use pricing without guest restriction
-                self.selected_pricing = pricing.filter(number_of_guests__isnull=True).first()
+                # Use any available pricing as fallback
+                self.selected_pricing = pricing.first()
         
         # Calculate total amount based on selected pricing
         if self.selected_pricing and self.total_days:
-            # Use weekly_price if it's a 7-night booking and weekly price exists
-            if self.total_days == 7 and self.selected_pricing.weekly_price:
-                self.total_amount = self.selected_pricing.weekly_price
+            # Use weekly_price for multiples of 7 if weekly price exists
+            if self.selected_pricing.weekly_price and self.total_days % 7 == 0:
+                num_weeks = self.total_days // 7
+                self.total_amount = self.selected_pricing.weekly_price * num_weeks
             else:
                 # Use per-night price
                 self.total_amount = self.selected_pricing.price_per_night * Decimal(str(self.total_days))
@@ -157,3 +218,33 @@ class Booking(models.Model):
         super().save(*args, **kwargs)
 
 
+
+class BlockedDate(models.Model):
+    """
+    Model to manually block dates for property maintenance, renovations, or personal use.
+    Blocked dates will prevent new bookings from being created.
+    """
+    property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='blocked_dates')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.CharField(max_length=200, help_text="Reason for blocking (e.g., Maintenance, Renovation)")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['start_date']
+        verbose_name = 'Blocked Date'
+        verbose_name_plural = 'Blocked Dates'
+    
+    def __str__(self):
+        return f"{self.property.name} - {self.start_date} to {self.end_date} ({self.reason})"
+    
+    def clean(self):
+        """Validate that end_date is after start_date"""
+        if self.start_date and self.end_date:
+            if self.end_date <= self.start_date:
+                raise ValidationError("End date must be after start date.")
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)

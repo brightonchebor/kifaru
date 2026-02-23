@@ -12,43 +12,28 @@ class PaymentSerializer(serializers.ModelSerializer):
             'id', 'booking', 'payment_method', 'amount', 'currency',
             'card_number_last4', 'card_type', 'transaction_id',
             'payment_status', 'mpesa_receipt_number', 'mpesa_phone_number',
+            'paystack_reference', 'paystack_access_code', 'authorization_url',
             'created_at', 'completed_at', 'failure_reason'
         ]
-        read_only_fields = ['transaction_id', 'created_at', 'completed_at', 'user']
-        
+        read_only_fields = ['transaction_id', 'created_at', 'completed_at', 'user', 
+                           'paystack_reference', 'paystack_access_code', 'authorization_url']
 
-class PaymentProcessSerializer(serializers.Serializer):
-    """Serializer for processing payment for an existing booking"""
+
+class PaymentInitializeSerializer(serializers.Serializer):
+    """Serializer for initializing Paystack payment"""
     booking_id = serializers.IntegerField()
-    payment_method = serializers.ChoiceField(choices=['card', 'bank', 'mpesa'])
+    callback_url = serializers.URLField(required=False, help_text="URL to redirect after payment")
     
-    # Card payment fields
-    card_number = serializers.CharField(max_length=19, required=False)
-    card_expiry = serializers.CharField(max_length=7, required=False)
-    card_cvv = serializers.CharField(max_length=4, required=False)
-    
-    # M-Pesa fields
-    mpesa_phone = serializers.CharField(max_length=15, required=False)
-    
-    def validate(self, data):
-        # Validate booking exists
+    def validate_booking_id(self, value):
         try:
-            booking = Booking.objects.get(id=data['booking_id'])
-            data['booking'] = booking
+            booking = Booking.objects.get(id=value)
         except Booking.DoesNotExist:
             raise serializers.ValidationError("Booking does not exist.")
         
-        # Check if payment already exists
+        # Check if payment already completed
         if hasattr(booking, 'payment') and booking.payment.payment_status == 'completed':
             raise serializers.ValidationError("Payment has already been completed for this booking.")
         
-        # Validate payment method specific fields
-        if data['payment_method'] == 'card':
-            if not all([data.get('card_number'), data.get('card_expiry'), data.get('card_cvv')]):
-                raise serializers.ValidationError("Card payment requires card_number, card_expiry, and card_cvv.")
-        
-        if data['payment_method'] == 'mpesa':
-            if not data.get('mpesa_phone'):
-                raise serializers.ValidationError("M-Pesa payment requires mpesa_phone.")
+        return value
         
         return data

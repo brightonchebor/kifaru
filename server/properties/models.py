@@ -18,6 +18,8 @@ class Property(models.Model):
     name = models.CharField(max_length=200)
     slug = models.SlugField(max_length=250, unique=True, blank=True)
     location = models.CharField(max_length=200)
+    location_description = models.TextField(blank=True, help_text="Detailed description of the location and surroundings")
+    tagline = models.CharField(max_length=200, blank=True, help_text="Short catchy description for marketing")
     country = models.CharField(max_length=100)
     property_category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='retreat')
     
@@ -49,14 +51,35 @@ class Property(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     def save(self, *args, **kwargs):
-        if not self. slug:
+        # Check if name changed (for existing instances) or if slug is empty (new instances)
+        regenerate_slug = False
+        
+        if self.pk:  # Existing instance - check if name changed
+            try:
+                old_instance = Property.objects.get(pk=self.pk)
+                if old_instance.name != self.name:
+                    regenerate_slug = True
+            except Property.DoesNotExist:
+                regenerate_slug = True
+        else:  # New instance
+            regenerate_slug = True
+        
+        if regenerate_slug:
             self.slug = slugify(self.name)
-            # Ensure uniqueness
+            # Ensure uniqueness (exclude current instance if updating)
             original_slug = self.slug
             counter = 1
-            while Property.objects.filter(slug=self.slug).exists():
+            queryset = Property.objects.filter(slug=self.slug)
+            if self.pk:
+                queryset = queryset.exclude(pk=self.pk)
+            
+            while queryset.exists():
                 self.slug = f"{original_slug}-{counter}"
                 counter += 1
+                queryset = Property.objects.filter(slug=self.slug)
+                if self.pk:
+                    queryset = queryset.exclude(pk=self.pk)
+        
         super().save(*args, **kwargs)
     
     def __str__(self):
@@ -64,43 +87,65 @@ class Property(models.Model):
 
 
 class Amenity(models.Model):
+
+    CATEGORY_CHOICES = [
+        ('kitchen', 'Kitchen'),
+        ('sanitary', 'Sanitary'),
+        ('bedroom', 'Bedroom'),
+        ('extras', 'Extras'),
+    ]
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='amenities')
-    image = CloudinaryField("image")
-    label = models.CharField(max_length=100)
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
+    icon = models.CharField(max_length=100, blank=True, help_text="Icon name or path")
+    title = models.CharField(max_length=100)
     
     class Meta:
         verbose_name_plural = 'Amenities'
     
     def __str__(self):
-        return f"{self.property.name} - {self.label}"
+        return f"{self.property.name} - {self.title}"
 
 
 class Highlight(models.Model):
     property = models.ForeignKey(Property, on_delete=models. CASCADE, related_name='highlights')
-    text = models.CharField(max_length=100)
+    title = models.CharField(max_length=100, blank=True)
+    image = CloudinaryField("image", blank=True, null=True)
 
 
 class PropertyImage(models.Model):
-    property = models.ForeignKey(Property, on_delete=models. CASCADE, related_name='images')
+    CATEGORY_CHOICES = [
+        ('bedroom', 'Bedroom'),
+        ('kitchen', 'Kitchen'),
+        ('living_room', 'Living Room'),
+        ('garden', 'Garden'),
+        ('outdoor', 'Outdoor'),
+        ('bathroom', 'Bathroom'),
+        ('other', 'Other'),
+    ]
+    
+    property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='images')
     image = CloudinaryField("image")
-    order = models. PositiveIntegerField(default=0)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other', help_text="Image category/room type")
+    order = models.PositiveIntegerField(default=0)
     
     class Meta:
-        ordering = ['order']
+        ordering = ['category', 'order']
 
     def __str__(self):
-        return f"{self.property.name} - {self.order}"
+        return f"{self.property.name} - {self.get_category_display()} ({self.order})"
 
 
 class Review(models.Model):
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='reviews')
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    reviewer_name = models.CharField(max_length=200, help_text="Display name for the reviewer")
     rating = models.PositiveSmallIntegerField()
     comment = models.TextField()
+    avatar = models.URLField(max_length=500, blank=True, help_text="Reviewer's avatar URL")
+    country = models.CharField(max_length=100, blank=True, help_text="Reviewer's country")
     created_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
-        return f"{self.user.email} - {self.property.name} ({self.rating}/5)"
+        return f"{self.reviewer_name} - {self.property.name} ({self.rating}/5)"
 
 
 class PropertyPricing(models.Model):
@@ -113,6 +158,7 @@ class PropertyPricing(models.Model):
     GUEST_TYPE_CHOICES = [
         ('international', 'International'),
         ('local', 'Local'),
+        ('all', 'All Guests'),
     ]
     
     STAY_TYPE_CHOICES = [
@@ -128,7 +174,7 @@ class PropertyPricing(models.Model):
     number_of_guests = models.PositiveIntegerField(null=True, blank=True, help_text="Number of guests (if pricing varies by occupancy)")
     min_nights = models.PositiveIntegerField(default=1)
     max_nights = models.PositiveIntegerField(null=True, blank=True)
-    price_per_night = models.DecimalField(max_digits=10, decimal_places=2, help_text="Price in EUR")
+    price_per_night = models.DecimalField(max_digits=10, decimal_places=2, help_text="Price in EUR", null=True, blank=True)
     weekly_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Price for full week (if applicable)")
     includes_breakfast = models.BooleanField(default=False)
     includes_fullboard = models.BooleanField(default=False)
@@ -193,3 +239,33 @@ class PropertyNetwork(models.Model):
     
     def __str__(self):
         return f"{self.property.name} ↔ {self.related_property.name}"
+
+
+class Gallery(models.Model):
+    """Main gallery images for the website"""
+    CATEGORY_CHOICES = [
+        ('property_showcase', 'Property Showcase'),
+        ('lifestyle', 'Lifestyle'),
+        ('amenities', 'Amenities'),
+        ('location', 'Location'),
+        ('events', 'Events'),
+        ('dining', 'Dining'),
+        ('activities', 'Activities'),
+        ('other', 'Other'),
+    ]
+    
+    image = CloudinaryField('image', folder='gallery')
+    title = models.CharField(max_length=200, blank=True, help_text="Optional caption for the image")
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default='other')
+    order = models.PositiveIntegerField(default=0, help_text="Display order (lower numbers first)")
+    is_featured = models.BooleanField(default=False, help_text="Highlight this image")
+    is_active = models.BooleanField(default=True, help_text="Show in gallery")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name_plural = 'Gallery Images'
+        ordering = ['order', '-created_at']
+    
+    def __str__(self):
+        return f"{self.title or 'Gallery Image'} ({self.category})"

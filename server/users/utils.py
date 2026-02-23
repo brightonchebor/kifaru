@@ -30,73 +30,71 @@ def send_code_to_user(email):
 
 def send_normal_email(data):
     """
-    Send email using Mailgun API (bypasses Django's email backend and SMTP issues).
+    Send email using Resend API (production) or SMTP (development).
+    Resend is used in production to avoid SMTP port blocking issues.
     """
     import logging
-    import requests
     import os
     
     logger = logging.getLogger(__name__)
     
-    try:
-        logger.info(f"Attempting to send email to {data['to_email']} via Mailgun API")
-        
-        # Get Mailgun credentials from environment
-        api_key = os.getenv('MAILGUN_API_KEY')
-        domain = os.getenv('MAILGUN_DOMAIN')
-        
-        if not api_key or not domain:
-            raise Exception("MAILGUN_API_KEY or MAILGUN_DOMAIN not set in .env")
-        
-        # Mailgun API endpoint (US region)
-        url = f"https://api.mailgun.net/v3/{domain}/messages"
-        
-        logger.info(f"Mailgun URL: {url}")
-        logger.info(f"Using API key: {api_key[:20]}...")
-        
-        # Send email via Mailgun API
-        response = requests.post(
-            url,
-            auth=("api", api_key),
-            data={
-                "from": f"Kifaru Impact <postmaster@{domain}>",
+    # Check if Resend API key is available (production)
+    resend_api_key = os.getenv('RESEND_API_KEY')
+    
+    if resend_api_key:
+        # Use Resend API (production - no SMTP blocking issues)
+        try:
+            import resend
+            
+            logger.info(f"Attempting to send email to {data['to_email']} via Resend API")
+            
+            resend.api_key = resend_api_key
+            
+            params = {
+                "from": settings.DEFAULT_FROM_EMAIL,
                 "to": [data['to_email']],
                 "subject": data['email_subject'],
                 "text": data['email_body']
             }
-        )
+            
+            email = resend.Emails.send(params)
+            logger.info(f"Email sent successfully via Resend API to {data['to_email']}")
+            
+        except Exception as e:
+            logger.error(f"Resend API failed: {type(e).__name__}: {str(e)}")
+            logger.error(f"Full error details:", exc_info=True)
+            # Don't raise - just log the error
+    else:
+        # Fallback to SMTP (development/local)
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
         
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"Email sent successfully via Mailgun API. ID: {result.get('id')}")
-        else:
-            logger.error(f"Mailgun API error: {response.status_code} - {response.text}")
-            raise Exception(f"Mailgun failed: {response.text}")
+        def _send_email_task():
+            """Internal function to send email via SMTP"""
+            try:
+                logger.info(f"Attempting to send email to {data['to_email']} via SMTP")
+                
+                email = EmailMessage(
+                    subject=data['email_subject'],
+                    body=data['email_body'],
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    to=[data['to_email']]
+                )
+                
+                email.send(fail_silently=False)
+                logger.info(f"Email sent successfully to {data['to_email']}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"SMTP email sending failed: {type(e).__name__}: {str(e)}")
+                raise
         
-    except Exception as e:
-        logger.error(f"Email sending failed: {type(e).__name__}: {str(e)}")
-        logger.error(f"Full error details:", exc_info=True)
-        raise
-        
-        response = requests.post(
-            url,
-            auth=("api", api_key),
-            data={
-                "from": from_email,
-                "to": [data['to_email']],
-                "subject": data['email_subject'],
-                "text": data['email_body']
-            }
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"Email sent successfully via Mailgun. ID: {response.json().get('id')}")
-        else:
-            logger.error(f"Mailgun API error: {response.status_code} - {response.text}")
-            raise Exception(f"Mailgun failed: {response.text}")
-        
-    except Exception as e:
-        logger.error(f"Email sending failed: {type(e).__name__}: {str(e)}")
-        logger.error(f"Full error details:", exc_info=True)
-        raise
+        # Execute email sending with timeout
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_send_email_task)
+                future.result(timeout=15)
+        except TimeoutError:
+            logger.warning(f"SMTP email timed out after 15 seconds to {data['to_email']}")
+        except Exception as e:
+            logger.error(f"Email sending failed: {str(e)}")
 

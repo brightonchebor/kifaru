@@ -137,11 +137,12 @@ DATABASES = {
         'NAME': env('PG_NAME'),
         'USER': 'postgres',
         'PASSWORD': env('PG_PWD'),
-        'HOST': 'gondola.proxy.rlwy.net',
-        'PORT': '52610'
+        'HOST': 'crossover.proxy.rlwy.net',
+        'PORT': '17850'
  
     }
 }
+
 
 
 
@@ -199,6 +200,11 @@ DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 # whitenoise
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
+
+# Paystack Configuration
+PAYSTACK_SECRET_KEY = env('PAYSTACK_SECRET_KEY', default='')
+PAYSTACK_PUBLIC_KEY = env('PAYSTACK_PUBLIC_KEY', default='')
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = 'users.User'
@@ -211,6 +217,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
     ),
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,  # Default page size for pagination
 }
 
 SIMPLE_JWT = {
@@ -238,25 +246,26 @@ SWAGGER_SETTINGS = {
 }
 
 # Email Configuration
-# Using Mailgun - Free tier: 100 emails/day (5000/month)
-# Sign up at: https://www.mailgun.com/
+# Using cPanel email (mail.infitech-innovation.com)
+# SSL/TLS Port 465 (recommended) or TLS Port 587
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = env('EMAIL_HOST', default='smtp.mailgun.org')
-EMAIL_PORT = env('EMAIL_PORT', default=587)
-EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')  # Your Mailgun SMTP login
-EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')  # Your Mailgun SMTP password
-EMAIL_USE_TLS = True
-EMAIL_USE_SSL = False
-DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='Kifaru Impact <your-email@example.com>')
+EMAIL_HOST = env('EMAIL_HOST', default='mail.infitech-innovation.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)  # Use 587 for TLS (more reliable in production)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='kifaru@infitech-innovation.com')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)  # TLS for port 587
+EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
+EMAIL_TIMEOUT = 10  # Add timeout to prevent worker hangs
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='Kifaru Impact <kifaru@infitech-innovation.com>')
 
 # Resend API (disabled until domain is verified)
 RESEND_API_KEY = env('RESEND_API_KEY', default='')
 
 JAZZMIN_SETTINGS = {
-    "site_title": "Event Management System",
+    "site_title": "Kifaru Impact Admin",
     "topmenu_links": [
-        {"app": "bookings"},
+        {"app": "booking"},
     ],
     "show_ui_builder": False,
 
@@ -292,7 +301,8 @@ JAZZMIN_UI_TWEAKS = {
         "success": "btn-success"
     }
 }
-FRONTEND_URL ='https://kifaru-git-frontend-asgards-projects.vercel.app'
+
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:5173')
 
 
 # Currency settings
