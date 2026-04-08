@@ -23,21 +23,16 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
-    'kifaru2-production.up.railway.app',
-    # 'http://kifaru2-production.up.railway.app',
-    # 'https://kifaru2-production.up.railway.app',
     '127.0.0.1',
-    'http://localhost:5173',
-    'https://kifaru-git-frontend-asgards-projects.vercel.app',
-    'https://kifaru-rust.vercel.app'
+    '144.172.112.31'
+
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    'https://kifaru2-production.up.railway.app',
-    'https://kifaru-git-frontend-asgards-projects.vercel.app',
-    'https://kifaru-rust.vercel.app'
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://144.172.112.31",
+    
 ]       
 
 # CORS Settings - PRODUCTION SAFE
@@ -132,14 +127,16 @@ WSGI_APPLICATION = "core.wsgi.application"
 
 DATABASES = {
     'default': {
-           
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': env('PG_NAME'),
-        'USER': 'postgres',
-        'PASSWORD': env('PG_PWD'),
-        'HOST': 'crossover.proxy.rlwy.net',
-        'PORT': '17850'
- 
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': env('MYSQL_DATABASE'),
+        'USER': env('MYSQL_USER'),
+        'PASSWORD': env('MYSQL_PASSWORD'),
+        'HOST': env('MYSQL_HOST', default='127.0.0.1'),
+        'PORT': env('MYSQL_PORT', default='3306'),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+        },
     }
 }
 
