@@ -286,20 +286,42 @@ class PropertySerializer(serializers.ModelSerializer):
             Highlight.objects.filter(property=instance).delete()
             self._create_nested(instance, None, highlights_data, highlights_images_files)
 
+        from django.db.models import ProtectedError
         if pricing_data is not None:
-            PropertyPricing.objects.filter(property=instance).delete()
+            incoming_ids = [p['id'] for p in pricing_data if 'id' in p]
+            # Safety checks for protected models
+            for item in PropertyPricing.objects.filter(property=instance).exclude(id__in=incoming_ids):
+                try:
+                    item.delete()
+                except ProtectedError:
+                    raise serializers.ValidationError({"pricing_options": f"Cannot remove {item.accommodation_type} pricing because it is tied to an active booking."})
+            
             for pricing in pricing_data:
-                PropertyPricing.objects.create(property=instance, **pricing)
+                p_id = pricing.pop('id', None)
+                if p_id:
+                    PropertyPricing.objects.filter(id=p_id, property=instance).update(**pricing)
+                else:
+                    PropertyPricing.objects.create(property=instance, **pricing)
 
         if features_data is not None:
-            PropertyFeature.objects.filter(property=instance).delete()
+            incoming_ids = [f['id'] for f in features_data if 'id' in f]
+            PropertyFeature.objects.filter(property=instance).exclude(id__in=incoming_ids).delete()
             for feature in features_data:
-                PropertyFeature.objects.create(property=instance, **feature)
+                f_id = feature.pop('id', None)
+                if f_id:
+                    PropertyFeature.objects.filter(id=f_id, property=instance).update(**feature)
+                else:
+                    PropertyFeature.objects.create(property=instance, **feature)
 
         if contacts_data is not None:
-            PropertyContact.objects.filter(property=instance).delete()
+            incoming_ids = [c['id'] for c in contacts_data if 'id' in c]
+            PropertyContact.objects.filter(property=instance).exclude(id__in=incoming_ids).delete()
             for contact in contacts_data:
-                PropertyContact.objects.create(property=instance, **contact)
+                c_id = contact.pop('id', None)
+                if c_id:
+                    PropertyContact.objects.filter(id=c_id, property=instance).update(**contact)
+                else:
+                    PropertyContact.objects.create(property=instance, **contact)
 
         if images_files:
             # Add new property images (don't delete existing automatically unless requested)
