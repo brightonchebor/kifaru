@@ -127,16 +127,13 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
         return self._update(request, partial=True)
 
     def _update(self, request, partial):
+        import sys
         import traceback
-        import logging
-        
-        # This will forcefully print the payload into your SSH server's journalctl logs
-        logger = logging.getLogger('django')
-        logger.error(f"\n======== INCOMING GUNICORN {request.method} PAYLOAD ========")
-        logger.error(request.data)
-        logger.error("==================================================\n")
-        
         try:
+            sys.stderr.write(f"\n======== INCOMING GUNICORN {request.method} PAYLOAD ========\n")
+            # Calling request.data triggers DRF the parser. If the parser crashes (e.g. malformed multipart form), it will be caught here!
+            sys.stderr.write(str(request.data)[:2000] + "\n==================================================\n")
+            
             instance = self.get_object()
             data = request.data.copy()
             for field in ('amenities', 'highlights', 'pricing_options', 'features', 'contacts'):
@@ -152,10 +149,10 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
 
             return Response(self.get_serializer(prop, context={'request': request}).data)
         except Exception as e:
+            sys.stderr.write(f"\nCRASH CAUGHT IN VIEW: {traceback.format_exc()}\n")
             return Response({
                 "CRITICAL_DEBUG_ERROR": str(e),
                 "TRACEBACK": traceback.format_exc().splitlines(),
-                "PAYLOAD_RECEIVED": request.data
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
