@@ -136,12 +136,6 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
             
             instance = self.get_object()
             data = request.data.copy()
-            for field in ('amenities', 'highlights', 'pricing_options', 'features', 'contacts'):
-                if field in data and isinstance(data. get(field), str):
-                    try:
-                        data[field] = json.loads(data. get(field))
-                    except Exception:
-                        return Response({'detail': f'{field} must be valid JSON.'}, status=status.HTTP_400_BAD_REQUEST)
 
             serializer = self.get_serializer(instance, data=data, partial=partial)
             serializer.is_valid(raise_exception=True)
