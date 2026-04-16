@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.exceptions import PermissionDenied
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -1003,11 +1004,19 @@ class BlockedDateListCreateView(generics.ListCreateAPIView):
     ordering = ['start_date']
     
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return BlockedDate.objects.none()
+
         user = self.request.user
-        
-        if user.role == 'admin':
+
+        if not user.is_authenticated:
+            return BlockedDate.objects.none()
+
+        role = getattr(user, 'role', None)
+
+        if role == 'admin':
             return BlockedDate.objects.all().select_related('property', 'created_by')
-        elif user.role == 'staff':
+        elif role == 'staff':
             # Staff can only see blocked dates for their assigned properties
             assigned_property_ids = user.assigned_properties.values_list('id', flat=True)
             return BlockedDate.objects.filter(property_id__in=assigned_property_ids).select_related('property', 'created_by')
@@ -1018,16 +1027,17 @@ class BlockedDateListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         # Auto-fill created_by
         user = self.request.user
+        role = getattr(user, 'role', None)
         
         # Only admin and staff can create blocked dates
-        if user.role not in ['admin', 'staff']:
-            raise PermissionError("Only admin and staff can block dates.")
+        if role not in ['admin', 'staff']:
+            raise PermissionDenied("Only admin and staff can block dates.")
         
         # Staff can only block dates for their assigned properties
-        if user.role == 'staff':
+        if role == 'staff':
             property_id = serializer.validated_data['property'].id
             if not user.assigned_properties.filter(id=property_id).exists():
-                raise PermissionError("You can only block dates for your assigned properties.")
+                raise PermissionDenied("You can only block dates for your assigned properties.")
         
         serializer.save(created_by=user)
 
@@ -1042,11 +1052,19 @@ class BlockedDateDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return BlockedDate.objects.none()
+
         user = self.request.user
-        
-        if user.role == 'admin':
+
+        if not user.is_authenticated:
+            return BlockedDate.objects.none()
+
+        role = getattr(user, 'role', None)
+
+        if role == 'admin':
             return BlockedDate.objects.all()
-        elif user.role == 'staff':
+        elif role == 'staff':
             assigned_property_ids = user.assigned_properties.values_list('id', flat=True)
             return BlockedDate.objects.filter(property_id__in=assigned_property_ids)
         else:

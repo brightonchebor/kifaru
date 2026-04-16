@@ -151,12 +151,8 @@ class PropertySerializer(serializers.ModelSerializer):
             if old_name in data:
                 value = data.pop(old_name)
 
-                # For updates, SKIP read-only nested fields unless they're being explicitly edited
-                if is_update and old_name in ['amenities', 'highlights', 'pricing_options', 'features', 'contacts']:
-                    continue
-
-                # Django QueryDict wraps values in lists, extract first element
-                if isinstance(value, list) and len(value) == 1:
+                # Django QueryDict from FormData wraps JSON strings in lists, extract first element
+                if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
                     value = value[0]
 
                 # Parse if it's a JSON string
@@ -215,9 +211,11 @@ class PropertySerializer(serializers.ModelSerializer):
         if highlights_data:
             for idx, hl in enumerate(highlights_data):
                 hl_copy = hl.copy() if isinstance(hl, dict) else {'title': hl}
-                hl_copy.pop('image', None)
-                if highlights_images and idx < len(highlights_images):
+                
+                # If a physical file was uploaded for this highlight, override the JSON string
+                if highlights_images and idx < len(highlights_images) and highlights_images[idx]:
                     hl_copy['image'] = highlights_images[idx]
+                    
                 Highlight.objects.create(property=property_obj, **hl_copy)
 
     def create(self, validated_data):
@@ -263,28 +261,53 @@ class PropertySerializer(serializers.ModelSerializer):
         return prop
 
     def update(self, instance, validated_data):
-        # Extract nested data (should be None for PATCH unless explicitly sent with images)
+        # Extract nested data
         amenities_data = validated_data.pop('amenities_data', None)
         highlights_data = validated_data.pop('highlights_data', None)
         pricing_data = validated_data.pop('pricing_options_data', None)
         features_data = validated_data.pop('features_data', None)
         contacts_data = validated_data.pop('contacts_data', None)
+        highlights_images_files = validated_data.pop('highlights_images', None)
         images_files = validated_data.pop('images', None)
-        amenity_images_files = validated_data.pop('amenity_images', None)
-        validated_data.pop('property_images_data', None)
+        images_metadata = validated_data.pop('property_images_data', None)
 
         # Update only changed property fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
-        # These will only be processed if explicitly sent (e.g., with image uploads via FormData)
-        # Normal JSON PATCH requests will skip these entirely due to to_internal_value filtering
-        
+        # Update nested resources if they are explicitly provided in the payload.
+        # This replaces the existing nested resources entirely to match the full payload approach.
+        if amenities_data is not None:
+            Amenity.objects.filter(property=instance).delete()
+            self._create_nested(instance, amenities_data, None)
+
+        if highlights_data is not None:
+            Highlight.objects.filter(property=instance).delete()
+            self._create_nested(instance, None, highlights_data, highlights_images_files)
+
+        if pricing_data is not None:
+            PropertyPricing.objects.filter(property=instance).delete()
+            for pricing in pricing_data:
+                PropertyPricing.objects.create(property=instance, **pricing)
+
+        if features_data is not None:
+            PropertyFeature.objects.filter(property=instance).delete()
+            for feature in features_data:
+                PropertyFeature.objects.create(property=instance, **feature)
+
+        if contacts_data is not None:
+            PropertyContact.objects.filter(property=instance).delete()
+            for contact in contacts_data:
+                PropertyContact.objects.create(property=instance, **contact)
+
         if images_files:
-            # Add new property images (don't delete existing)
+            # Add new property images (don't delete existing automatically unless requested)
             for idx, img_file in enumerate(images_files):
-                PropertyImage.objects.create(property=instance, image=img_file, order=idx)
+                metadata = images_metadata[idx] if images_metadata and idx < len(images_metadata) else {}
+                category = metadata.get('category', 'other')
+                order = metadata.get('order', idx)
+                PropertyImage.objects.create(property=instance, image=img_file, category=category, order=order)
 
         return instance
 

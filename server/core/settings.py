@@ -19,12 +19,13 @@ environ.Env.read_env(BASE_DIR / '.env')
 
 SECRET_KEY = "django-insecure-xyid0fm_gm8mddcap09umj4p=7vg)@j)o*1!)rnft^zi!ke^-m"
 
-DEBUG = True
+DEBUG =  False
 
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    '144.172.112.31'
+    '144.172.112.31',
+    'oceankifaru.ke',
 
 ]
 
@@ -32,6 +33,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost",
     "http://127.0.0.1",
     "http://144.172.112.31",
+    'https://oceankifaru.ke',
     
 ]       
 
@@ -309,3 +311,6 @@ DEFAULT_CURRENCY = "EUR"
 USE_TZ = True
 TIME_ZONE = "Africa/Nairobi"  # Can be customized per property in the frontend
 
+# Image capacity
+DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600
+FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600

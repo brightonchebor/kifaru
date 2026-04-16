@@ -113,19 +113,19 @@ class Highlight(models.Model):
 
 
 class PropertyImage(models.Model):
-    CATEGORY_CHOICES = [
-        ('bedroom', 'Bedroom'),
-        ('kitchen', 'Kitchen'),
-        ('living_room', 'Living Room'),
-        ('garden', 'Garden'),
-        ('outdoor', 'Outdoor'),
-        ('bathroom', 'Bathroom'),
-        ('other', 'Other'),
-    ]
+    # CATEGORY_CHOICES = [
+    #     ('bedroom', 'Bedroom'),
+    #     ('kitchen', 'Kitchen'),
+    #     ('living_room', 'Living Room'),
+    #     ('garden', 'Garden'),
+    #     ('outdoor', 'Outdoor'),
+    #     ('bathroom', 'Bathroom'),
+    #     ('other', 'Other'),
+    # ]
     
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='images')
     image = CloudinaryField("image")
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other', help_text="Image category/room type")
+    category = models.CharField(max_length=20, help_text="Image category/room type", default='other')
     order = models.PositiveIntegerField(default=0)
     
     class Meta:
