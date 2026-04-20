@@ -193,9 +193,10 @@ DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 # MEDIA_URL = '/media/' 
 
 
-# whitenoise
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-WHITENOISE_MANIFEST_STRICT = False
+# whitenoise — CompressedStaticFilesStorage compresses files without requiring
+# a pre-generated manifest, avoiding the collectstatic crash caused by
+# missing Bootstrap .map source files from django-jazzmin.
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 
 # Paystack Configuration

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.utils.html import format_html
 from .models import (
     Property, Amenity, Highlight, PropertyImage, Review,
     PropertyPricing, PropertyFeature, PropertyContact, PropertyNetwork, Gallery
@@ -8,14 +9,7 @@ from .models import (
 class AmenityInline(admin.TabularInline):
     model = Amenity
     extra = 1
-    readonly_fields = ('image_preview',)
-    
-    def image_preview(self, instance):
-        if instance.image:
-            return f'<img src="{instance.image.url}" style="height: 50px;" />'
-        return ''
-    image_preview.allow_tags = True
-    image_preview.short_description = 'Preview'
+    # Amenity has no image field — no preview needed
 
 
 class HighlightInline(admin.TabularInline):
@@ -30,9 +24,8 @@ class PropertyImageInline(admin.TabularInline):
 
     def preview(self, instance):
         if instance.image:
-            return f'<img src="{instance.image.url}" style="height: 100px;" />'
+            return format_html('<img src="{}" style="height: 100px;" />', instance.image.url)
         return ''
-    preview.allow_tags = True
     preview.short_description = 'Preview'
 
 
@@ -102,12 +95,11 @@ class HighlightAdmin(admin.ModelAdmin):
     list_filter = ['property']
     search_fields = ['title']
     readonly_fields = ('image_preview',)
-    
+
     def image_preview(self, instance):
         if instance.image:
-            return f'<img src="{instance.image.url}" style="height: 50px;" />'
+            return format_html('<img src="{}" style="height: 50px;" />', instance.image.url)
         return ''
-    image_preview.allow_tags = True
     image_preview.short_description = 'Image'
 
 
@@ -174,7 +166,6 @@ class GalleryAdmin(admin.ModelAdmin):
     
     def image_preview(self, instance):
         if instance.image:
-            return f'<img src="{instance.image.url}" style="max-height: 200px; max-width: 300px;" />'
+            return format_html('<img src="{}" style="max-height: 200px; max-width: 300px;" />', instance.image.url)
         return 'No image'
-    image_preview.allow_tags = True
     image_preview.short_description = 'Preview'
