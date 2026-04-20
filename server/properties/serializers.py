@@ -209,13 +209,23 @@ class PropertySerializer(serializers.ModelSerializer):
                 Amenity.objects.create(property=property_obj, category=category, icon=icon, title=title)
 
         if highlights_data:
-            for idx, hl in enumerate(highlights_data):
+            # Use a file queue instead of index matching.
+            # Files are only consumed for highlights that have no existing image URL.
+            # This prevents the first new file from being incorrectly assigned to an
+            # existing highlight that already has a Cloudinary URL.
+            file_queue = list(highlights_images) if highlights_images else []
+
+            for hl in highlights_data:
                 hl_copy = hl.copy() if isinstance(hl, dict) else {'title': hl}
-                
-                # If a physical file was uploaded for this highlight, override the JSON string
-                if highlights_images and idx < len(highlights_images) and highlights_images[idx]:
-                    hl_copy['image'] = highlights_images[idx]
-                    
+
+                existing_image = hl_copy.get('image')
+                has_existing_url = existing_image and isinstance(existing_image, str)
+
+                if not has_existing_url:
+                    # No existing image URL — assign the next uploaded file if available
+                    if file_queue:
+                        hl_copy['image'] = file_queue.pop(0)
+
                 Highlight.objects.create(property=property_obj, **hl_copy)
 
     def create(self, validated_data):
@@ -270,6 +280,49 @@ class PropertySerializer(serializers.ModelSerializer):
         highlights_images_files = validated_data.pop('highlights_images', None)
         images_files = validated_data.pop('images', None)
         images_metadata = validated_data.pop('property_images_data', None)
+
+        # =====================================================================
+        # CONTRACT VALIDATION
+        # Enforce the frontend upload contract before touching the database.
+        # =====================================================================
+
+        # --- Rule 1: highlights_images contract ---
+        # The number of uploaded image files must not exceed the number of
+        # highlights that actually NEED a new image (i.e. have no existing URL).
+        # Existing highlights MUST include their Cloudinary URL in the JSON
+        # "image" field so the backend won't incorrectly assign a new file to them.
+        if highlights_data is not None and highlights_images_files:
+            slots_needing_image = sum(
+                1 for hl in highlights_data
+                if not (isinstance(hl, dict) and hl.get('image') and isinstance(hl.get('image'), str))
+            )
+            files_count = len(highlights_images_files)
+            if files_count > slots_needing_image:
+                raise serializers.ValidationError({
+                    "highlights_images": (
+                        f"Received {files_count} image file(s) but only {slots_needing_image} "
+                        f"highlight(s) need a new image. "
+                        f"Existing highlights must include their current Cloudinary URL in the "
+                        f"JSON 'image' field (e.g. \"image\": \"https://res.cloudinary.com/...\") "
+                        f"so the backend can preserve them and assign new files only to new highlights."
+                    )
+                })
+
+        # --- Rule 2: property_images contract ---
+        # The number of new image files must exactly match the number of metadata
+        # entries sent in property_images. Only send metadata for NEW uploads —
+        # existing PropertyImage rows are already in the database.
+        if images_files and images_metadata is not None:
+            if len(images_files) != len(images_metadata):
+                raise serializers.ValidationError({
+                    "property_images": (
+                        f"Received {len(images_files)} new image file(s) but "
+                        f"{len(images_metadata)} metadata entries in 'property_images'. "
+                        f"These counts must match exactly. "
+                        f"Only include metadata (category, order) for NEW images being uploaded — "
+                        f"do not re-send metadata for existing gallery images."
+                    )
+                })
 
         # Update only changed property fields
         for attr, value in validated_data.items():
