@@ -7,6 +7,8 @@ from rest_framework.exceptions import PermissionDenied
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 from datetime import datetime, timedelta
 import phonenumbers
 from phonenumbers import geocoder
@@ -597,56 +599,148 @@ class BookingDetailView(generics.RetrieveUpdateDestroyAPIView):
 class BookingCancelView(APIView):
     """
     Cancel a booking and handle refunds.
-    
+
+    POST body (all optional):
+        reason (str): Human-readable reason for cancellation (stored in special_requests audit trail)
+
     - Updates booking status to 'cancelled'
-    - Marks property as 'free' again
-    - Initiates payment refund if payment was completed
-    - Cannot cancel already completed bookings
+    - Safely handles payment refund if payment was completed
+    - Sends cancellation email to the guest and all property contacts
+    - Cannot cancel already cancelled or completed bookings
     """
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request, pk):
         booking = get_object_or_404(Booking, pk=pk)
         user = request.user
-        
+        reason = request.data.get('reason', '').strip()
+
         # Check permissions
         has_permission = (
-            booking.user == user or 
-            user.role == 'admin' or 
+            booking.user == user or
+            user.role == 'admin' or
             (user.role == 'staff' and user.assigned_properties.filter(id=booking.property.id).exists())
         )
-        
+
         if not has_permission:
-            return Response({'error': 'You do not have permission to cancel this booking'}, 
-                          status=status.HTTP_403_FORBIDDEN)
-        
+            return Response(
+                {'error': 'You do not have permission to cancel this booking'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Check if booking can be cancelled
         if booking.status == 'cancelled':
-            return Response({'error': 'Booking is already cancelled'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {'error': 'Booking is already cancelled'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         if booking.status == 'completed':
-            return Response({'error': 'Cannot cancel a completed booking'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-        
-        # Cancel booking
+            return Response(
+                {'error': 'Cannot cancel a completed booking'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # --- Cancel the booking ---
         booking.status = 'cancelled'
+
+        # Append reason to special_requests as an audit trail entry
+        if reason:
+            timestamp = timezone.now().strftime('%Y-%m-%d %H:%M UTC')
+            cancellation_note = f"[Cancelled by {user.email} on {timestamp}] Reason: {reason}"
+            booking.special_requests = (
+                f"{booking.special_requests}\n\n{cancellation_note}"
+                if booking.special_requests
+                else cancellation_note
+            )
+
         booking.save()
-        
-        # Update property status
-        booking.property.status = 'free'
-        booking.property.save()
-        
-        # Handle payment refund if needed
-        if hasattr(booking, 'payment') and booking.payment.payment_status == 'completed':
-            payment = booking.payment
-            payment.payment_status = 'refunded'
-            payment.save()
-        
+
+        # --- Safely handle payment refund ---
+        refund_initiated = False
+        try:
+            payment = booking.payment  # May raise RelatedObjectDoesNotExist
+            if payment.payment_status == 'completed':
+                payment.payment_status = 'refunded'
+                payment.save()
+                refund_initiated = True
+        except Exception:
+            pass  # No payment record exists — nothing to refund
+
+        # --- Send cancellation emails ---
+        self._send_cancellation_emails(booking, reason, refund_initiated, request)
+
         return Response({
             'message': 'Booking cancelled successfully',
+            'refund_initiated': refund_initiated,
             'booking': BookingSerializer(booking, context={'request': request}).data
         }, status=status.HTTP_200_OK)
+
+    def _send_cancellation_emails(self, booking, reason, refund_initiated, request):
+        """Send cancellation confirmation to the guest and property contacts."""
+        property_obj = booking.property
+        guest_name = booking.full_name
+        guest_email = booking.email
+        ref = booking.booking_reference
+        check_in = booking.check_in.strftime('%d %b %Y')
+        check_out = booking.check_out.strftime('%d %b %Y')
+        reason_line = f"Reason: {reason}" if reason else "No reason provided."
+        refund_line = (
+            "A refund has been initiated and will be processed within 5–10 business days."
+            if refund_initiated
+            else "No payment had been completed, so no refund is required."
+        )
+
+        # --- Email to guest ---
+        guest_subject = f"Your booking {ref} has been cancelled — {property_obj.name}"
+        guest_message = (
+            f"Dear {guest_name},\n\n"
+            f"Your booking at {property_obj.name} has been cancelled.\n\n"
+            f"Booking Reference: {ref}\n"
+            f"Check-in:  {check_in}\n"
+            f"Check-out: {check_out}\n\n"
+            f"{reason_line}\n\n"
+            f"{refund_line}\n\n"
+            f"If you have any questions, please contact the property directly.\n\n"
+            f"Kind regards,\nThe {property_obj.name} Team"
+        )
+        try:
+            send_mail(
+                subject=guest_subject,
+                message=guest_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[guest_email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+        # --- Email to all property contacts ---
+        contact_emails = list(
+            property_obj.contacts.values_list('email', flat=True).exclude(email='')
+        )
+        if contact_emails:
+            staff_subject = f"[Admin] Booking {ref} cancelled — {property_obj.name}"
+            staff_message = (
+                f"A booking has been cancelled for {property_obj.name}.\n\n"
+                f"Booking Reference: {ref}\n"
+                f"Guest: {guest_name} <{guest_email}>\n"
+                f"Check-in:  {check_in}\n"
+                f"Check-out: {check_out}\n\n"
+                f"{reason_line}\n\n"
+                f"Refund status: {'Initiated' if refund_initiated else 'Not applicable'}\n\n"
+                f"Please review the booking dashboard for further details."
+            )
+            try:
+                send_mail(
+                    subject=staff_subject,
+                    message=staff_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=contact_emails,
+                    fail_silently=True,
+                )
+            except Exception:
+                pass
 
 
 class UserBookingsView(generics.ListAPIView):
