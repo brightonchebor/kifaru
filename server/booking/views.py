@@ -122,7 +122,6 @@ class BookingListCreateView(generics.ListCreateAPIView):
             f"Check-in:  {check_in}\n"
             f"Check-out: {check_out}\n"
             f"Total: {currency} {booking.total_amount}\n\n"
-            f"To complete payment, please use this link:\n{payment_link}\n\n"
             f"If you have questions, reply to this email.\n\n"
             f"Kind regards,\nThe {property_obj.name} Team"
         )
