@@ -28,6 +28,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from decimal import Decimal
 from django.db import models as django_models
+from users.utils import send_normal_email
 
 class BookingListCreateView(generics.ListCreateAPIView):
     """
@@ -94,10 +95,65 @@ class BookingListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
+
+        self._send_booking_created_emails(booking)
         
         # Return full booking details using BookingSerializer
         response_serializer = BookingSerializer(booking, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    def _send_booking_created_emails(self, booking):
+        """Notify guest and property contacts about a new booking."""
+        property_obj = booking.property
+        guest_name = booking.full_name
+        guest_email = booking.email
+        ref = booking.booking_reference
+        check_in = booking.check_in.strftime('%d %b %Y')
+        check_out = booking.check_out.strftime('%d %b %Y')
+        currency = getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+        payment_link = f"{frontend_url}/payment?booking_id={booking.id}"
+
+        guest_subject = f"Booking received {ref} — {property_obj.name}"
+        guest_message = (
+            f"Dear {guest_name},\n\n"
+            f"Thank you for your booking request at {property_obj.name}.\n\n"
+            f"Booking Reference: {ref}\n"
+            f"Check-in:  {check_in}\n"
+            f"Check-out: {check_out}\n"
+            f"Total: {currency} {booking.total_amount}\n\n"
+            f"To complete payment, please use this link:\n{payment_link}\n\n"
+            f"If you have questions, reply to this email.\n\n"
+            f"Kind regards,\nThe {property_obj.name} Team"
+        )
+
+        send_normal_email({
+            'email_body': guest_message,
+            'email_subject': guest_subject,
+            'to_email': guest_email
+        })
+
+        contact_emails = list(
+            property_obj.contacts.values_list('email', flat=True).exclude(email='')
+        )
+        if contact_emails:
+            staff_subject = f"[Admin] New booking {ref} — {property_obj.name}"
+            staff_message = (
+                f"A new booking has been created for {property_obj.name}.\n\n"
+                f"Booking Reference: {ref}\n"
+                f"Guest: {guest_name} <{guest_email}>\n"
+                f"Check-in:  {check_in}\n"
+                f"Check-out: {check_out}\n"
+                f"Total: {currency} {booking.total_amount}\n\n"
+                f"Payment link sent to guest: {payment_link}\n"
+            )
+
+            for email in contact_emails:
+                send_normal_email({
+                    'email_body': staff_message,
+                    'email_subject': staff_subject,
+                    'to_email': email
+                })
 
 
 class CalculatePriceView(APIView):
@@ -664,6 +720,7 @@ class BookingCancelView(APIView):
                 payment.payment_status = 'refunded'
                 payment.save()
                 refund_initiated = True
+                self._send_refund_email(payment)
         except Exception:
             pass  # No payment record exists — nothing to refund
 
@@ -741,6 +798,57 @@ class BookingCancelView(APIView):
                 )
             except Exception:
                 pass
+
+    def _send_refund_email(self, payment):
+        """Notify guest and property contacts when a refund is initiated."""
+        booking = payment.booking
+        property_obj = booking.property
+        guest_name = booking.full_name
+        guest_email = booking.email
+        ref = booking.booking_reference
+        check_in = booking.check_in.strftime('%d %b %Y')
+        check_out = booking.check_out.strftime('%d %b %Y')
+        currency = getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
+
+        guest_subject = f"Refund initiated — {ref}"
+        guest_message = (
+            f"Hi {guest_name},\n\n"
+            f"Your payment refund has been initiated.\n\n"
+            f"Booking Reference: {ref}\n"
+            f"Property: {property_obj.name}\n"
+            f"Check-in:  {check_in}\n"
+            f"Check-out: {check_out}\n"
+            f"Amount: {currency} {payment.amount}\n\n"
+            f"Refunds typically take 5–10 business days to reflect.\n\n"
+            f"Kind regards,\nThe {property_obj.name} Team"
+        )
+
+        send_normal_email({
+            'email_body': guest_message,
+            'email_subject': guest_subject,
+            'to_email': guest_email
+        })
+
+        contact_emails = list(
+            property_obj.contacts.values_list('email', flat=True).exclude(email='')
+        )
+        if contact_emails:
+            staff_subject = f"[Admin] Refund initiated — {ref}"
+            staff_message = (
+                f"A refund has been initiated for {property_obj.name}.\n\n"
+                f"Booking Reference: {ref}\n"
+                f"Guest: {guest_name} <{guest_email}>\n"
+                f"Check-in:  {check_in}\n"
+                f"Check-out: {check_out}\n"
+                f"Amount: {currency} {payment.amount}\n"
+            )
+
+            for email in contact_emails:
+                send_normal_email({
+                    'email_body': staff_message,
+                    'email_subject': staff_subject,
+                    'to_email': email
+                })
 
 
 class UserBookingsView(generics.ListAPIView):

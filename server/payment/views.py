@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from drf_yasg.utils import swagger_auto_schema
@@ -18,8 +19,66 @@ from .serializers import (
 from .paystack_utils import initialize_payment, verify_payment, verify_webhook_signature
 import json
 import logging
+from users.utils import send_normal_email
 
 logger = logging.getLogger(__name__)
+
+
+def _send_payment_status_email(payment, status_label, failure_reason=None):
+    """Notify guest and property contacts of payment status changes."""
+    booking = payment.booking
+    property_obj = booking.property
+    ref = booking.booking_reference
+    guest_name = booking.full_name
+    guest_email = booking.email
+    check_in = booking.check_in.strftime('%d %b %Y')
+    check_out = booking.check_out.strftime('%d %b %Y')
+    currency = payment.currency or getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
+
+    status_line = f"Payment status: {status_label}"
+    if failure_reason:
+        status_line = f"{status_line}\nReason: {failure_reason}"
+
+    guest_subject = f"Payment {status_label.lower()} — {ref}"
+    guest_message = (
+        f"Hi {guest_name},\n\n"
+        f"{status_line}\n\n"
+        f"Booking Reference: {ref}\n"
+        f"Property: {property_obj.name}\n"
+        f"Check-in:  {check_in}\n"
+        f"Check-out: {check_out}\n"
+        f"Amount: {currency} {payment.amount}\n\n"
+        f"If you need help, please contact us with your booking reference.\n\n"
+        f"Kind regards,\nThe {property_obj.name} Team"
+    )
+
+    send_normal_email({
+        'email_body': guest_message,
+        'email_subject': guest_subject,
+        'to_email': guest_email
+    })
+
+    contact_emails = list(
+        property_obj.contacts.values_list('email', flat=True).exclude(email='')
+    )
+    if contact_emails:
+        staff_subject = f"[Admin] Payment {status_label.lower()} — {ref}"
+        staff_message = (
+            f"Payment update for {property_obj.name}.\n\n"
+            f"Booking Reference: {ref}\n"
+            f"Guest: {guest_name} <{guest_email}>\n"
+            f"Check-in:  {check_in}\n"
+            f"Check-out: {check_out}\n"
+            f"Amount: {currency} {payment.amount}\n\n"
+            f"{status_line}\n"
+        )
+
+        for email in contact_emails:
+            send_normal_email({
+                'email_body': staff_message,
+                'email_subject': staff_subject,
+                'to_email': email
+            })
 
 
 class AdminPaymentListView(generics.ListAPIView):
@@ -200,17 +259,19 @@ class PaymentVerifyView(APIView):
             transaction_data = verify_result['data']
             
             if transaction_data['status'] == 'success':
-                # Payment successful
-                payment.payment_status = 'completed'
-                payment.completed_at = timezone.now()
-                payment.transaction_id = transaction_data.get('id')
-                
-                # Update booking status
                 booking = payment.booking
-                booking.status = 'confirmed'
-                booking.save()
+                # Payment successful
+                if payment.payment_status != 'completed':
+                    payment.payment_status = 'completed'
+                    payment.completed_at = timezone.now()
+                    payment.transaction_id = transaction_data.get('id')
                 
-                payment.save()
+                    # Update booking status
+                    booking.status = 'confirmed'
+                    booking.save()
+                    
+                    payment.save()
+                    _send_payment_status_email(payment, 'Completed')
                 
                 return Response({
                     'message': 'Payment verified successfully',
@@ -220,9 +281,11 @@ class PaymentVerifyView(APIView):
             
             else:
                 # Payment failed or abandoned
-                payment.payment_status = 'failed'
-                payment.failure_reason = f"Transaction status: {transaction_data['status']}"
-                payment.save()
+                if payment.payment_status != 'failed':
+                    payment.payment_status = 'failed'
+                    payment.failure_reason = f"Transaction status: {transaction_data['status']}"
+                    payment.save()
+                    _send_payment_status_email(payment, 'Failed', payment.failure_reason)
                 
                 return Response({
                     'error': 'Payment verification failed',
@@ -284,6 +347,7 @@ class PaystackWebhookView(APIView):
                     booking.save()
                     
                     payment.save()
+                    _send_payment_status_email(payment, 'Completed')
                     logger.info(f"Payment completed via webhook: {reference}")
                 
             except Payment.DoesNotExist:
