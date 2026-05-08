@@ -181,7 +181,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
             frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
             
             # Build the frontend reset link (matches React route /password-reset/:uidb64/:token)
-            reset_link = f"{frontend_url}/password-reset/{uidb64}/{token}/"
+            reset_link = f"{frontend_url}/password-reset-confirm/{uidb64}/{token}/"
             
             email_body = f'Hi {user.first_name},\n\nUse the link below to reset your password:\n\n{reset_link}\n\nIf you did not request a password reset, please ignore this email.'
             
