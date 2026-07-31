@@ -15,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 environ.Env.read_env(BASE_DIR / '.env')
 
-SECRET_KEY = "django-insecure-xyid0fm_gm8mddcap09umj4p=7vg)@j)o*1!)rnft^zi!ke^-m"
+SECRET_KEY = env('SECRET_KEY')
 DEBUG = False
 
 ALLOWED_HOSTS = [
@@ -34,8 +34,14 @@ CSRF_TRUSTED_ORIGINS = [
     
 ]       
 
+# Frontend URL (used for CORS + email links)
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:5173')
+
 # CORS Settings - PRODUCTION SAFE
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    'http://localhost:5173',
+]
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -88,6 +94,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "core.middleware.SecurityHeadersMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -300,9 +307,6 @@ JAZZMIN_UI_TWEAKS = {
     }
 }
 
-FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:5173')
-
-
 # Currency settings
 DEFAULT_CURRENCY = "EUR"
 
@@ -347,3 +351,54 @@ LOGGING = {
         },
     },
 }
+
+
+# ============ Security Headers ============
+
+# Content Security Policy
+# Permissive enough for the jazzmin admin, Swagger docs, and browsable API.
+CSP_DEFAULT_SRC = "'self'"
+CSP_SCRIPT_SRC = "'self' 'unsafe-inline' 'unsafe-eval'"
+CSP_STYLE_SRC = "'self' 'unsafe-inline'"
+CSP_IMG_SRC = "'self' data: blob: https://res.cloudinary.com"
+CSP_FONT_SRC = "'self' data:"
+CSP_CONNECT_SRC = "'self'"
+CSP_OBJECT_SRC = "'none'"
+CSP_BASE_URI = "'self'"
+CSP_FRAME_ANCESTORS = "'self'"
+CSP_FORM_ACTION = "'self'"
+
+CONTENT_SECURITY_POLICY = (
+    f"default-src {CSP_DEFAULT_SRC}; "
+    f"script-src {CSP_SCRIPT_SRC}; "
+    f"style-src {CSP_STYLE_SRC}; "
+    f"img-src {CSP_IMG_SRC}; "
+    f"font-src {CSP_FONT_SRC}; "
+    f"connect-src {CSP_CONNECT_SRC}; "
+    f"object-src {CSP_OBJECT_SRC}; "
+    f"base-uri {CSP_BASE_URI}; "
+    f"frame-ancestors {CSP_FRAME_ANCESTORS}; "
+    f"form-action {CSP_FORM_ACTION}; "
+    "upgrade-insecure-requests"
+)
+
+# Permissions Policy
+PERMISSIONS_POLICY = (
+    "camera=(), microphone=(), geolocation=(), "
+    "interest-cohort=(), browsing-topics=()"
+)
+
+# Enable these protections regardless of DEBUG, but especially in production
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+
+if not DEBUG:
+    # HSTS (Strict-Transport-Security)
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # Ensure cookies are secure
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
