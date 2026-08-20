@@ -24,6 +24,8 @@ ALLOWED_HOSTS = [
     '144.172.112.31',
     'oceankifaru.ke',
 
+    'hkifaru-nysi.onrender.com'
+
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -31,6 +33,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1",
     "http://144.172.112.31",
     'https://oceankifaru.ke',
+
+    'https://kifaru-nysi.onrender.com'
     
 ]       
 
