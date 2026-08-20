@@ -24,7 +24,7 @@ ALLOWED_HOSTS = [
     '144.172.112.31',
     'oceankifaru.ke',
 
-    'hkifaru-nysi.onrender.com'
+    'kifaru-nysi.onrender.com'
 
 ]
 
