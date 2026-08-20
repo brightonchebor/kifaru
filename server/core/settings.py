@@ -24,7 +24,8 @@ ALLOWED_HOSTS = [
     '144.172.112.31',
     'oceankifaru.ke',
 
-    'kifaru-nysi.onrender.com'
+    'kifaru-nysi.onrender.com',
+    'kifaru-web.vercel.app'
 
 ]
 
@@ -34,7 +35,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://144.172.112.31",
     'https://oceankifaru.ke',
 
-    'https://kifaru-nysi.onrender.com'
+    'https://kifaru-nysi.onrender.com',
+    'https://kifaru-web.vercel.app'
     
 ]       
 
