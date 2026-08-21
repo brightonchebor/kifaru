@@ -364,11 +364,11 @@ LOGGING = {
 # Content Security Policy
 # Permissive enough for the jazzmin admin, Swagger docs, and browsable API.
 CSP_DEFAULT_SRC = "'self'"
-CSP_SCRIPT_SRC = "'self' 'unsafe-inline' 'unsafe-eval'"
-CSP_STYLE_SRC = "'self' 'unsafe-inline'"
-CSP_IMG_SRC = "'self' data: blob: https://res.cloudinary.com"
-CSP_FONT_SRC = "'self' data:"
-CSP_CONNECT_SRC = "'self'"
+CSP_SCRIPT_SRC = "'self' 'unsafe-inline' 'unsafe-eval' https://bot.infi-saas.com"
+CSP_STYLE_SRC = "'self' 'unsafe-inline' https://fonts.googleapis.com"
+CSP_IMG_SRC = "'self' data: blob: https://res.cloudinary.com https://bot.infi-saas.com"
+CSP_FONT_SRC = "'self' data: https://fonts.gstatic.com"
+CSP_CONNECT_SRC = "'self' https://bot.infi-saas.com"
 CSP_OBJECT_SRC = "'none'"
 CSP_BASE_URI = "'self'"
 CSP_FRAME_ANCESTORS = "'self'"
