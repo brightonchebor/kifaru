@@ -1,39 +1,53 @@
 from rest_framework import serializers
 from .models import Payment
 from booking.models import Booking
-from datetime import datetime, timedelta
-from django.utils import timezone
 
 
 class PaymentSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer used to embed payment info inside booking responses.
+    """
     class Meta:
         model = Payment
         fields = [
-            'id', 'booking', 'payment_method', 'amount', 'currency',
-            'card_number_last4', 'card_type', 'transaction_id',
-            'payment_status', 'mpesa_receipt_number', 'mpesa_phone_number',
-            'paystack_reference', 'paystack_access_code', 'authorization_url',
-            'created_at', 'completed_at', 'failure_reason'
+            'id', 'transaction_id', 'payment_method', 'amount', 'currency',
+            'prepayment_amount', 'remaining_amount',
+            'bank_transfer_reference', 'mpesa_receipt_number', 'mpesa_phone_number',
+            'payment_status', 'notes',
+            'created_at', 'completed_at',
         ]
-        read_only_fields = ['transaction_id', 'created_at', 'completed_at', 'user', 
-                           'paystack_reference', 'paystack_access_code', 'authorization_url']
+        read_only_fields = fields
 
 
-class PaymentInitializeSerializer(serializers.Serializer):
-    """Serializer for initializing Paystack payment"""
-    booking_id = serializers.IntegerField()
-    callback_url = serializers.URLField(required=False, help_text="URL to redirect after payment")
-    
-    def validate_booking_id(self, value):
-        try:
-            booking = Booking.objects.get(id=value)
-        except Booking.DoesNotExist:
-            raise serializers.ValidationError("Booking does not exist.")
-        
-        # Check if payment already completed
-        if hasattr(booking, 'payment') and booking.payment.payment_status == 'completed':
-            raise serializers.ValidationError("Payment has already been completed for this booking.")
-        
-        return value
-        
-        return data
+class PaymentCreateSerializer(serializers.ModelSerializer):
+    """
+    Admin serializer for manually recording a payment received from a client.
+    The owner fills this in after the client transfers money.
+    """
+    class Meta:
+        model = Payment
+        fields = [
+            'booking', 'payment_method', 'amount', 'currency',
+            'prepayment_amount', 'remaining_amount',
+            'bank_transfer_reference', 'mpesa_receipt_number', 'mpesa_phone_number',
+            'payment_status', 'notes', 'completed_at',
+        ]
+
+    def validate(self, attrs):
+        booking = attrs.get('booking')
+        # Prevent double-recording a payment for the same booking
+        if self.instance is None:  # only on create
+            if hasattr(booking, 'payment'):
+                raise serializers.ValidationError({
+                    'booking': (
+                        f'A payment record already exists for booking '
+                        f'{booking.booking_reference}. Edit the existing record instead.'
+                    )
+                })
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            validated_data['user'] = request.user
+        return super().create(validated_data)

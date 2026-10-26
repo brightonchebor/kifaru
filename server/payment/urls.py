@@ -1,18 +1,15 @@
 from django.urls import path
 from .views import (
     AdminPaymentListView,
-    PaymentInitializeView,
-    PaymentVerifyView,
-    PaystackWebhookView,
+    PaymentRecordView,
+    PaymentDetailView,
+    BookingPaymentView,
 )
 
-
-urlpatterns = [    
-    # Paystack payment endpoints
-    path('payments/initialize/', PaymentInitializeView.as_view(), name='payment-initialize'),
-    path('payments/verify/<str:reference>/', PaymentVerifyView.as_view(), name='payment-verify'),
-    path('payments/webhook/', PaystackWebhookView.as_view(), name='payment-webhook'),
-    
-    # Admin endpoints
+urlpatterns = [
+    # Admin manual payment endpoints
     path('admin/payments/', AdminPaymentListView.as_view(), name='admin-payments'),
+    path('payments/record/', PaymentRecordView.as_view(), name='payment-record'),
+    path('payments/<int:pk>/', PaymentDetailView.as_view(), name='payment-detail'),
+    path('payments/booking/<int:booking_id>/', BookingPaymentView.as_view(), name='payment-by-booking'),
 ]
