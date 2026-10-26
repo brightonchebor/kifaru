@@ -11,14 +11,13 @@ schema_view = get_schema_view(
     openapi.Info(
         title="kifaru",
         default_version='v1',
-        description="A REST API for propety management system.",
+        description="A REST API for property management system.",
         terms_of_service="https://www.google.com/policies/terms/",
         license=openapi.License(name="BSD License"),
     ),
     public=True,
     permission_classes=(permissions.AllowAny,),
     authentication_classes=[],
-    # url='https://kifaru2-production.up.railway.app',
 )
 
 urlpatterns = [
@@ -28,6 +27,7 @@ urlpatterns = [
     path('api/', include('payment.urls')),
     path('api/', include('booking.urls')),
     path('api/', include('content.urls')),
+    path('api/', include('promotions.urls')),
            
 
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
