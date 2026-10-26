@@ -105,26 +105,64 @@ class BookingListCreateView(generics.ListCreateAPIView):
     def _send_booking_created_emails(self, booking):
         """Notify guest and property contacts about a new booking."""
         property_obj = booking.property
-        guest_name = booking.full_name
-        guest_email = booking.email
-        ref = booking.booking_reference
-        check_in = booking.check_in.strftime('%d %b %Y')
-        check_out = booking.check_out.strftime('%d %b %Y')
-        currency = getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
-        payment_link = f"{frontend_url}/payment?booking_id={booking.id}"
+        guest_name   = booking.full_name
+        guest_email  = booking.email
+        ref          = booking.booking_reference
+        check_in     = booking.check_in.strftime('%d %b %Y')
+        check_out    = booking.check_out.strftime('%d %b %Y')
+        currency     = getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
+        has_promo    = booking.promo_code_id is not None
+        is_free      = has_promo and booking.total_amount == 0
 
-        guest_subject = f"Booking received {ref} — {property_obj.name}"
-        guest_message = (
-            f"Dear {guest_name},\n\n"
-            f"Thank you for your booking request at {property_obj.name}.\n\n"
-            f"Booking Reference: {ref}\n"
-            f"Check-in:  {check_in}\n"
-            f"Check-out: {check_out}\n"
-            f"Total: {currency} {booking.total_amount}\n\n"
-            f"If you have questions, reply to this email.\n\n"
-            f"Kind regards,\nThe {property_obj.name} Team"
-        )
+        # ── Guest email ──────────────────────────────────────────────────────
+        if is_free:
+            # 100% promo — booking already auto-confirmed
+            guest_subject = f"🎉 Booking CONFIRMED (Free) — {ref}"
+            guest_message = (
+                f"Dear {guest_name},\n\n"
+                f"Great news! Your booking at {property_obj.name} has been CONFIRMED "
+                f"and is completely free thanks to your promo code "
+                f"'{booking.promo_code.code}'.\n\n"
+                f"Booking Reference : {ref}\n"
+                f"Check-in          : {check_in}\n"
+                f"Check-out         : {check_out}\n"
+                f"Amount Due        : {currency} 0.00 (fully covered by promo)\n\n"
+                f"No payment is required. We look forward to welcoming you!\n\n"
+                f"Kind regards,\nThe {property_obj.name} Team"
+            )
+        elif has_promo:
+            # Partial promo discount
+            guest_subject = f"Booking received {ref} — {property_obj.name}"
+            guest_message = (
+                f"Dear {guest_name},\n\n"
+                f"Thank you for your booking request at {property_obj.name}.\n\n"
+                f"Booking Reference : {ref}\n"
+                f"Check-in          : {check_in}\n"
+                f"Check-out         : {check_out}\n"
+                f"Original Price    : {currency} {booking.original_amount}\n"
+                f"Promo Code        : {booking.promo_code.code} "
+                f"(-{currency} {booking.discount_amount})\n"
+                f"Amount Due        : {currency} {booking.total_amount}\n\n"
+                f"The property owner will contact you shortly with payment details.\n"
+                f"Please use your booking reference {ref} when making payment.\n\n"
+                f"If you have questions, reply to this email.\n\n"
+                f"Kind regards,\nThe {property_obj.name} Team"
+            )
+        else:
+            # Standard booking — no promo
+            guest_subject = f"Booking received {ref} — {property_obj.name}"
+            guest_message = (
+                f"Dear {guest_name},\n\n"
+                f"Thank you for your booking request at {property_obj.name}.\n\n"
+                f"Booking Reference : {ref}\n"
+                f"Check-in          : {check_in}\n"
+                f"Check-out         : {check_out}\n"
+                f"Total             : {currency} {booking.total_amount}\n\n"
+                f"The property owner will contact you shortly with payment details.\n"
+                f"Please use your booking reference {ref} when making payment.\n\n"
+                f"If you have questions, reply to this email.\n\n"
+                f"Kind regards,\nThe {property_obj.name} Team"
+            )
 
         send_normal_email({
             'email_body': guest_message,
@@ -132,19 +170,30 @@ class BookingListCreateView(generics.ListCreateAPIView):
             'to_email': guest_email
         })
 
+        # ── Owner / staff email ───────────────────────────────────────────────
         contact_emails = list(
             property_obj.contacts.values_list('email', flat=True).exclude(email='')
         )
         if contact_emails:
-            staff_subject = f"[Admin] New booking {ref} — {property_obj.name}"
+            promo_line = ''
+            if has_promo:
+                promo_line = (
+                    f"Promo Code        : {booking.promo_code.code}\n"
+                    f"Original Price    : {currency} {booking.original_amount}\n"
+                    f"Discount          : -{currency} {booking.discount_amount}\n"
+                )
+
+            staff_subject = f"[New Booking] {guest_name} — {property_obj.name} — {ref}"
             staff_message = (
                 f"A new booking has been created for {property_obj.name}.\n\n"
-                f"Booking Reference: {ref}\n"
-                f"Guest: {guest_name} <{guest_email}>\n"
-                f"Check-in:  {check_in}\n"
-                f"Check-out: {check_out}\n"
-                f"Total: {currency} {booking.total_amount}\n\n"
-                f"Payment link sent to guest: {payment_link}\n"
+                f"Booking Reference : {ref}\n"
+                f"Guest             : {guest_name} <{guest_email}>\n"
+                f"Check-in          : {check_in}\n"
+                f"Check-out         : {check_out}\n"
+                f"{promo_line}"
+                f"Amount Due        : {currency} {booking.total_amount}"
+                f"{' (FREE — auto-confirmed)' if is_free else ''}\n\n"
+                f"Please contact the guest with your payment details to confirm this booking."
             )
 
             for email in contact_emails:
@@ -153,6 +202,7 @@ class BookingListCreateView(generics.ListCreateAPIView):
                     'email_subject': staff_subject,
                     'to_email': email
                 })
+
 
 
 class CalculatePriceView(APIView):

@@ -40,6 +40,14 @@ class Booking(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookings', null=True, blank=True, help_text="User account if booking was made by authenticated user")
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='bookings')
     selected_pricing = models.ForeignKey(PropertyPricing, on_delete=models.PROTECT, null=True, blank=True, help_text="Selected pricing option")
+    promo_code = models.ForeignKey(
+        'promotions.PromoCode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bookings',
+        help_text="Promo code applied to this booking (if any)"
+    )
     
     # Personal details (required for all bookings, whether guest or authenticated)
     full_name = models.CharField(max_length=200)
@@ -57,6 +65,14 @@ class Booking(models.Model):
     number_of_adults = models.PositiveIntegerField(default=1)
     number_of_children = models.PositiveIntegerField(default=0)
     total_days = models.PositiveIntegerField()
+    original_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Price before promo discount"
+    )
+    discount_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Amount saved via promo code (0 if no promo)"
+    )
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     
     # Meal inclusions

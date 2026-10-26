@@ -4,7 +4,7 @@ from payment.serializers import PaymentSerializer
 from properties.models import Property
 from datetime import datetime, timedelta
 from django.utils import timezone
-from django.db import models
+from django.db import models, transaction
 import phonenumbers
 from phonenumbers import geocoder
 
@@ -61,14 +61,23 @@ class BookingCreateRequestSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
     phone = serializers.CharField(required=False, allow_blank=True)
-    
+    # Optional promo code — client types this in at checkout
+    promo_code = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        write_only=True,
+        help_text="Optional promo code for a discount (e.g. JOHN-FREE or KIF-A3NQ7RWZ)"
+    )
+
     class Meta:
         model = Booking
         fields = [
             'property', 'accommodation_type', 'check_in', 'check_out',
             'number_of_guests', 'number_of_adults', 'number_of_children',
             'full_name', 'email', 'phone', 'id_passport_number',
-            'dog_included', 'jacuzzi_reservation', 'special_requests'
+            'dog_included', 'jacuzzi_reservation', 'special_requests',
+            'promo_code',
         ]
     
     def validate(self, data):
@@ -467,16 +476,48 @@ class BookingCreateRequestSerializer(serializers.ModelSerializer):
                     })
         
         return data
+
+    def _resolve_promo(self, code_str):
+        """
+        Look up the promo code object. Raise ValidationError if it doesn't
+        exist or is not valid. Does NOT mark it as used here — that happens
+        atomically inside create().
+        """
+        from promotions.models import PromoCode
+        code = code_str.upper().strip()
+        try:
+            promo = PromoCode.objects.get(code=code)
+        except PromoCode.DoesNotExist:
+            raise serializers.ValidationError({
+                'promo_code': f'The promo code "{code}" does not exist.'
+            })
+        if not promo.is_active:
+            raise serializers.ValidationError({
+                'promo_code': f'The promo code "{code}" has been deactivated.'
+            })
+        if promo.is_expired:
+            raise serializers.ValidationError({
+                'promo_code': f'The promo code "{code}" has expired.'
+            })
+        if promo.is_exhausted:
+            raise serializers.ValidationError({
+                'promo_code': f'The promo code "{code}" has already been fully redeemed.'
+            })
+        return promo
     
     def create(self, validated_data):
+        from promotions.models import PromoCode, PromoUsage
+        from decimal import Decimal
+
+        # Pop promo_code string (write-only field, not a model field)
+        promo_code_str = validated_data.pop('promo_code', None)
+
         # Get user if authenticated
         user = self.context['request'].user
         is_authenticated = user and user.is_authenticated
-        
+
         if is_authenticated:
-            # For authenticated users, link to user account
             validated_data['user'] = user
-            # Auto-fill from profile if not provided in request
             if not validated_data.get('full_name'):
                 validated_data['full_name'] = user.get_full_name()
             if not validated_data.get('email'):
@@ -484,11 +525,63 @@ class BookingCreateRequestSerializer(serializers.ModelSerializer):
             if not validated_data.get('phone'):
                 validated_data['phone'] = user.phone_number
         else:
-            # For guest bookings, user field is null
             validated_data['user'] = None
-            # Personal details already validated to be present
-        
-        return super().create(validated_data)
+
+        with transaction.atomic():
+            # Create booking first (model.save() calculates total_amount)
+            booking = super().create(validated_data)
+
+            # Apply promo code if provided
+            if promo_code_str:
+                promo_code_str = promo_code_str.upper().strip()
+                # Lock the promo row to prevent race conditions
+                try:
+                    promo = PromoCode.objects.select_for_update().get(code=promo_code_str)
+                except PromoCode.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'promo_code': f'Promo code "{promo_code_str}" does not exist.'
+                    })
+
+                # Re-validate inside the transaction (state may have changed)
+                if not promo.is_active:
+                    raise serializers.ValidationError(
+                        {'promo_code': f'Promo code "{promo_code_str}" has been deactivated.'}
+                    )
+                if promo.is_expired:
+                    raise serializers.ValidationError(
+                        {'promo_code': f'Promo code "{promo_code_str}" has expired.'}
+                    )
+                if promo.is_exhausted:
+                    raise serializers.ValidationError(
+                        {'promo_code': f'Promo code "{promo_code_str}" has been fully redeemed.'}
+                    )
+
+                # Calculate discount
+                original_amount = booking.total_amount
+                discount_amount, final_amount = promo.calculate_discount(original_amount)
+
+                # Apply to booking
+                booking.promo_code = promo
+                booking.original_amount = original_amount
+                booking.discount_amount = discount_amount
+                booking.total_amount = final_amount
+
+                # Free bookings auto-confirm
+                if final_amount == Decimal('0.00'):
+                    booking.status = 'confirmed'
+
+                booking.save(update_fields=[
+                    'promo_code', 'original_amount', 'discount_amount',
+                    'total_amount', 'status'
+                ])
+
+                # Increment usage counter and create audit record
+                PromoCode.objects.filter(pk=promo.pk).update(
+                    times_used=models.F('times_used') + 1
+                )
+                PromoUsage.objects.create(promo_code=promo, booking=booking)
+
+        return booking
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -500,7 +593,8 @@ class BookingSerializer(serializers.ModelSerializer):
     pricing_breakdown = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.get_full_name', read_only=True)
-    
+    promo_code_info = serializers.SerializerMethodField()
+
     class Meta:
         model = Booking
         fields = [
@@ -509,18 +603,34 @@ class BookingSerializer(serializers.ModelSerializer):
             'full_name', 'email', 'phone', 'id_passport_number',
             'accommodation_type', 'guest_type', 'stay_type', 'check_in', 'check_out',
             'number_of_guests', 'number_of_adults', 'number_of_children',
-            'total_days', 'total_amount', 'pricing_breakdown',
+            'total_days', 'original_amount', 'discount_amount', 'total_amount',
+            'pricing_breakdown', 'promo_code_info',
             'includes_breakfast', 'includes_fullboard', 'dog_included', 'jacuzzi_reservation',
             'status', 'special_requests', 'payment',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'booking_reference', 'total_days', 'total_amount', 'user', 
-            'user_name', 'user_email', 'stay_type', 'includes_breakfast', 'includes_fullboard', 
-            'created_at', 'updated_at', 'property_details', 'payment', 
-            'property_name', 'property_location', 'pricing_breakdown'
+            'id', 'booking_reference', 'total_days', 'total_amount',
+            'original_amount', 'discount_amount',
+            'user', 'user_name', 'user_email', 'stay_type',
+            'includes_breakfast', 'includes_fullboard',
+            'created_at', 'updated_at', 'property_details', 'payment',
+            'property_name', 'property_location', 'pricing_breakdown', 'promo_code_info'
         ]
-    
+
+    def get_promo_code_info(self, obj):
+        if not obj.promo_code_id:
+            return None
+        promo = obj.promo_code
+        return {
+            'code': promo.code,
+            'discount_type': promo.discount_type,
+            'discount_value': promo.discount_value,
+            'original_amount': str(obj.original_amount) if obj.original_amount else None,
+            'discount_amount': str(obj.discount_amount),
+            'final_amount': str(obj.total_amount),
+        }
+
     def get_pricing_breakdown(self, obj):
         """Return detailed pricing information"""
         if obj.selected_pricing:
