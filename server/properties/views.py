@@ -7,6 +7,7 @@ from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Prefetch
+from django.db.models.deletion import ProtectedError
 from .models import (
     Property, PropertyImage, Review,
     PropertyFeature, PropertyPricing, PropertyContact, Gallery
@@ -119,6 +120,25 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in ['PUT', 'PATCH', 'DELETE']:
             return [IsAdminUser()]
         return [AllowAny()]
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        try:
+            self.perform_destroy(instance)
+        except ProtectedError:
+            return Response(
+                {
+                    'detail': (
+                        'This property cannot be deleted because it has '
+                        'existing bookings or other protected records. '
+                        'Archive it instead.'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def put(self, request, *args, **kwargs):
         return self._update(request, partial=False)
