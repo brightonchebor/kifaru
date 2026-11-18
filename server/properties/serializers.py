@@ -3,6 +3,7 @@ from .models import (
     Property, Amenity, Highlight, PropertyImage, Review,
     PropertyPricing, PropertyFeature, PropertyContact, Gallery
 )
+from .image_uploads import AtomicImageUploadMixin, SupportedImageField
 import json
 
 
@@ -22,7 +23,7 @@ class AmenitySerializer(serializers.ModelSerializer):
 
 
 class HighlightSerializer(serializers.ModelSerializer):
-    image = serializers.ImageField(required=False, allow_null=True)
+    image = SupportedImageField(required=False, allow_null=True)
 
     class Meta:
         model = Highlight
@@ -36,6 +37,8 @@ class HighlightSerializer(serializers.ModelSerializer):
 
 
 class PropertyImageSerializer(serializers.ModelSerializer):
+    image = SupportedImageField()
+
     class Meta:
         model = PropertyImage
         fields = ['id', 'image', 'category', 'order']
@@ -78,7 +81,9 @@ class PropertyContactSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'role', 'email', 'phone', 'whatsapp']
 
 
-class PropertySerializer(serializers.ModelSerializer):
+class PropertySerializer(AtomicImageUploadMixin, serializers.ModelSerializer):
+    upload_fields = ("background_image", "images", "highlights_images")
+
     # Read-only nested serializers for GET requests
     amenities = AmenitySerializer(many=True, read_only=True)
     highlights = HighlightSerializer(many=True, read_only=True)
@@ -87,14 +92,14 @@ class PropertySerializer(serializers.ModelSerializer):
     contacts = PropertyContactSerializer(many=True, read_only=True)
     
     # Image fields - writable for POST/PUT, returns URL for GET
-    background_image = serializers.ImageField(
+    background_image = SupportedImageField(
         required=False, 
         allow_null=True,
         help_text="Upload property background/cover image"
     )
     
     images = serializers.ListField(
-        child=serializers.ImageField(),
+        child=SupportedImageField(),
         write_only=True,
         required=False,
         help_text="Upload multiple property images (bedroom, kitchen, etc.)"
@@ -102,7 +107,7 @@ class PropertySerializer(serializers.ModelSerializer):
     
     # Amenity image uploads (separate from amenities JSON)
     highlights_images = serializers.ListField(
-        child=serializers.ImageField(),
+        child=SupportedImageField(),
         write_only=True,
         required=False,
         help_text="Upload amenity images (matches amenities array by index)"
@@ -226,6 +231,8 @@ class PropertySerializer(serializers.ModelSerializer):
                     if file_queue:
                         hl_copy['image'] = file_queue.pop(0)
 
+                if 'image' in hl_copy:
+                    hl_copy['image'] = self._upload_image(hl_copy['image'], 'highlights_images')
                 Highlight.objects.create(property=property_obj, **hl_copy)
 
     def create(self, validated_data):
@@ -239,7 +246,10 @@ class PropertySerializer(serializers.ModelSerializer):
         images_files = validated_data.pop('images', [])
         images_metadata = validated_data.pop('property_images_data', [])
 
-        # Create property (background_image is handled automatically by Django)
+        if 'background_image' in validated_data:
+            validated_data['background_image'] = self._upload_image(
+                validated_data['background_image'], 'background_image'
+            )
         prop = Property.objects.create(**validated_data)
 
         # Create amenities and highlights
@@ -264,7 +274,7 @@ class PropertySerializer(serializers.ModelSerializer):
             order = metadata.get('order', idx)
             PropertyImage.objects.create(
                 property=prop,
-                image=img_file,
+                image=self._upload_image(img_file, 'images', index=idx),
                 category=category,
                 order=order
             )
@@ -326,6 +336,8 @@ class PropertySerializer(serializers.ModelSerializer):
 
         # Update only changed property fields
         for attr, value in validated_data.items():
+            if attr == 'background_image':
+                value = self._upload_image(value, 'background_image')
             setattr(instance, attr, value)
         instance.save()
 
@@ -382,16 +394,33 @@ class PropertySerializer(serializers.ModelSerializer):
                 metadata = images_metadata[idx] if images_metadata and idx < len(images_metadata) else {}
                 category = metadata.get('category', 'other')
                 order = metadata.get('order', idx)
-                PropertyImage.objects.create(property=instance, image=img_file, category=category, order=order)
+                PropertyImage.objects.create(
+                    property=instance,
+                    image=self._upload_image(img_file, 'images', index=idx),
+                    category=category,
+                    order=order,
+                )
 
         return instance
 
 
-class GallerySerializer(serializers.ModelSerializer):
+class GallerySerializer(AtomicImageUploadMixin, serializers.ModelSerializer):
+    upload_fields = ("image",)
+    image = SupportedImageField()
+
     class Meta:
         model = Gallery
         fields = ['id', 'image', 'title', 'category', 'order', 'is_featured', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        validated_data['image'] = self._upload_image(validated_data['image'], 'image', folder='gallery')
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if 'image' in validated_data:
+            validated_data['image'] = self._upload_image(validated_data['image'], 'image', folder='gallery')
+        return super().update(instance, validated_data)
     
     def to_representation(self, instance):
         """Return image URL in GET responses"""
