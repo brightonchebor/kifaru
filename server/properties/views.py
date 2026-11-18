@@ -147,27 +147,11 @@ class PropertyDetailView(generics.RetrieveUpdateDestroyAPIView):
         return self._update(request, partial=True)
 
     def _update(self, request, partial):
-        import sys
-        import traceback
-        try:
-            sys.stderr.write(f"\n======== INCOMING GUNICORN {request.method} PAYLOAD ========\n")
-            # Calling request.data triggers DRF the parser. If the parser crashes (e.g. malformed multipart form), it will be caught here!
-            sys.stderr.write(str(request.data)[:2000] + "\n==================================================\n")
-            
-            instance = self.get_object()
-            data = request.data.copy()
-
-            serializer = self.get_serializer(instance, data=data, partial=partial)
-            serializer.is_valid(raise_exception=True)
-            prop = serializer.save()
-
-            return Response(self.get_serializer(prop, context={'request': request}).data)
-        except Exception as e:
-            sys.stderr.write(f"\nCRASH CAUGHT IN VIEW: {traceback.format_exc()}\n")
-            return Response({
-                "CRITICAL_DEBUG_ERROR": str(e),
-                "TRACEBACK": traceback.format_exc().splitlines(),
-            }, status=status.HTTP_400_BAD_REQUEST)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data.copy(), partial=partial)
+        serializer.is_valid(raise_exception=True)
+        prop = serializer.save()
+        return Response(self.get_serializer(prop, context={'request': request}).data)
 
 
 class ReviewListCreateView(generics.ListCreateAPIView):
