@@ -1,167 +1,124 @@
-from rest_framework import generics, status, filters
-from rest_framework.views import APIView
+from rest_framework import generics, filters, status
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.exceptions import PermissionDenied
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from django.conf import settings
-
-from .models import Payment
-from .serializers import PaymentSerializer, PaymentCreateSerializer
+from django.utils.decorators import method_decorator
+from drf_yasg.utils import swagger_auto_schema
+from django.db.models import Prefetch
 from booking.models import Booking
-from users.utils import send_normal_email
-import logging
 
-logger = logging.getLogger(__name__)
-
-
-def require_admin(user):
-    if not user.is_authenticated or getattr(user, 'role', None) != 'admin':
-        raise PermissionDenied("Only admins can perform this action.")
+from .models import Payment, PaymentTransaction
+from .serializers import PaymentSerializer, PaymentCreateSerializer, RefundSerializer
+from .customer_serializers import CustomerPaymentSerializer
 
 
-# ── Admin: List all payments ──────────────────────────────────────────────────
+class IsPaymentAdmin(BasePermission):
+    message = "Only admins can manage payment records."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user.is_authenticated and (getattr(user, 'role', None) == 'admin' or user.is_superuser))
+
+
+def payment_queryset():
+    return Payment.objects.select_related(
+        'booking__property', 'user', 'recorded_by', 'updated_by'
+    ).prefetch_related('transactions')
+
+
+class UserPaymentsView(generics.ListAPIView):
+    """Read payment state for all bookings belonging to the current account.
+
+    Includes unpaid bookings and free bookings before any payment record exists.
+    No user/email query parameter can expand this account's scope.
+    """
+    serializer_class = CustomerPaymentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['created_at', 'check_in']
+    ordering = ['-created_at']
+    pagination_class = PageNumberPagination
+    http_method_names = ['get', 'head', 'options']
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False) or not self.request.user.is_authenticated:
+            return Booking.objects.none()
+        return Booking.objects.filter(user=self.request.user).select_related('property', 'payment').prefetch_related(
+            Prefetch('payment__transactions', queryset=PaymentTransaction.objects.exclude(kind='legacy'),
+                     to_attr='customer_transactions')
+        )
+
 
 class AdminPaymentListView(generics.ListAPIView):
-    """
-    GET /api/admin/payments/   — List all payment records (admin only)
-
-    Supports filtering by:
-      ?payment_status=completed
-      ?payment_method=mpesa
-      ?booking=<booking_id>
-    """
+    """List receipts and balances, including booking, guest and property details."""
     serializer_class = PaymentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPaymentAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['payment_status', 'payment_method']
-    search_fields = ['transaction_id', 'booking__booking_reference', 'user__email',
-                     'mpesa_receipt_number', 'bank_transfer_reference']
+    filterset_fields = ['payment_status', 'payment_method', 'booking', 'currency']
+    search_fields = ['transaction_id', 'booking__booking_reference', 'booking__full_name',
+                     'booking__email', 'booking__phone', 'transactions__reference']
     ordering_fields = ['created_at', 'amount']
     ordering = ['-created_at']
     pagination_class = PageNumberPagination
 
     def get_queryset(self):
-        require_admin(self.request.user)
-        return Payment.objects.all().select_related('booking', 'user')
+        return payment_queryset()
 
 
-# ── Admin: Record a new payment ───────────────────────────────────────────────
-
+@method_decorator(name='post', decorator=swagger_auto_schema(responses={201: PaymentSerializer}))
 class PaymentRecordView(generics.CreateAPIView):
-    """
-    POST /api/payments/record/   — Manually record a payment received (admin only)
+    """Record one verified receipt. Repeating a booking adds an instalment to its history.
 
-    The owner calls this after a client sends money via bank transfer or M-Pesa.
-
-    Example body (M-Pesa):
-    {
-        "booking": 42,
-        "payment_method": "mpesa",
-        "amount": "250.00",
-        "currency": "EUR",
-        "mpesa_receipt_number": "QHX7234ABC",
-        "mpesa_phone_number": "+254712345678",
-        "payment_status": "completed"
-    }
-
-    Example body (bank transfer with deposit):
-    {
-        "booking": 42,
-        "payment_method": "bank_transfer",
-        "amount": "250.00",
-        "prepayment_amount": "250.00",
-        "remaining_amount": "250.00",
-        "bank_transfer_reference": "REF-2026-00123",
-        "payment_status": "partial",
-        "notes": "Client paid 50% deposit. Remaining due on arrival."
-    }
+    amount is this receipt's amount. Status and remaining balance are calculated.
+    Include a unique idempotency_key to safely retry the same request.
     """
     serializer_class = PaymentCreateSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        require_admin(self.request.user)
-        payment = serializer.save()
-
-        # If payment is marked completed, confirm the booking automatically
-        if payment.payment_status == 'completed':
-            booking = payment.booking
-            if booking.status != 'confirmed':
-                booking.status = 'confirmed'
-                if not payment.completed_at:
-                    payment.completed_at = timezone.now()
-                    payment.save(update_fields=['completed_at'])
-                booking.save(update_fields=['status'])
-                self._send_confirmation_email(booking, payment)
-
-    def _send_confirmation_email(self, booking, payment):
-        """Send booking confirmation email to the guest."""
-        currency = payment.currency or getattr(settings, 'DEFAULT_CURRENCY', 'EUR')
-        subject = f"Booking CONFIRMED — {booking.booking_reference}"
-        message = (
-            f"Dear {booking.full_name},\n\n"
-            f"Great news! Your booking has been confirmed.\n\n"
-            f"Booking Reference : {booking.booking_reference}\n"
-            f"Property          : {booking.property.name}\n"
-            f"Check-in          : {booking.check_in.strftime('%d %b %Y')}\n"
-            f"Check-out         : {booking.check_out.strftime('%d %b %Y')}\n"
-            f"Amount Paid       : {currency} {payment.amount}\n\n"
-            f"We look forward to welcoming you!\n\n"
-            f"Kind regards,\nThe {booking.property.name} Team"
-        )
-        send_normal_email({
-            'email_body': message,
-            'email_subject': subject,
-            'to_email': booking.email,
-        })
+    permission_classes = [IsPaymentAdmin]
 
 
-# ── Admin: Retrieve + Update a payment ───────────────────────────────────────
-
+@method_decorator(name='patch', decorator=swagger_auto_schema(responses={200: PaymentSerializer}))
 class PaymentDetailView(generics.RetrieveUpdateAPIView):
-    """
-    GET   /api/payments/<id>/   — Get a payment record (admin only)
-    PATCH /api/payments/<id>/   — Update a payment record (e.g. mark completed)
+    """Read a payment summary or update notes / increase its cumulative amount.
 
-    Common PATCH use cases:
-      - Mark as completed:  { "payment_status": "completed", "completed_at": "2026-11-15T10:00:00Z" }
-      - Record remainder:   { "remaining_amount": "0.00", "payment_status": "completed" }
-      - Mark as refunded:   { "payment_status": "refunded", "notes": "Client cancelled" }
+    PATCH amount is the new cumulative received total; the increase becomes a new
+    receipt. Booking links are immutable and refunds use the refunds endpoint.
     """
-    serializer_class = PaymentCreateSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPaymentAdmin]
     http_method_names = ['get', 'patch', 'head', 'options']
 
+    def get_serializer_class(self):
+        return PaymentSerializer if self.request.method == 'GET' else PaymentCreateSerializer
+
     def get_queryset(self):
-        require_admin(self.request.user)
-        return Payment.objects.all().select_related('booking', 'user')
+        return payment_queryset()
 
-    def perform_update(self, serializer):
-        payment = serializer.save()
-        # Auto-confirm booking when payment is marked completed
-        if payment.payment_status == 'completed':
-            booking = payment.booking
-            if booking.status != 'confirmed':
-                booking.status = 'confirmed'
-                booking.save(update_fields=['status'])
-                if not payment.completed_at:
-                    Payment.objects.filter(pk=payment.pk).update(completed_at=timezone.now())
-
-
-# ── Admin: Get payment by booking ─────────────────────────────────────────────
 
 class BookingPaymentView(generics.RetrieveAPIView):
-    """
-    GET /api/payments/booking/<booking_id>/   — Get payment for a specific booking (admin only)
-    """
+    """Get a booking's payment summary and immutable receipt/refund history."""
     serializer_class = PaymentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPaymentAdmin]
 
     def get_object(self):
-        require_admin(self.request.user)
-        booking = get_object_or_404(Booking, pk=self.kwargs['booking_id'])
-        return get_object_or_404(Payment, booking=booking)
+        return get_object_or_404(payment_queryset(), booking_id=self.kwargs['booking_id'])
+
+
+@method_decorator(name='post', decorator=swagger_auto_schema(responses={201: PaymentSerializer}))
+class PaymentRefundView(generics.CreateAPIView):
+    """Record money actually returned for a cancelled booking, including partial refunds.
+
+    Return the money externally first, then submit amount, payment_method,
+    reference, notes and refund_confirmed=true. This endpoint does not transfer money.
+    """
+    serializer_class = RefundSerializer
+    permission_classes = [IsPaymentAdmin]
+    queryset = Payment.objects.none()  # Supplies model metadata for the path parameter in Swagger.
+
+    def create(self, request, *args, **kwargs):
+        payment = get_object_or_404(Payment, pk=self.kwargs['pk'])
+        context = dict(self.get_serializer_context(), payment=payment)
+        serializer = self.get_serializer(data=request.data, context=context)
+        serializer.is_valid(raise_exception=True)
+        payment = serializer.save()
+        return Response(PaymentSerializer(payment, context=context).data, status=status.HTTP_201_CREATED)
