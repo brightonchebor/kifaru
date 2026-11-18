@@ -99,6 +99,10 @@ class Booking(models.Model):
         return f"{self.booking_reference} - {user_email}"
     
     def save(self, *args, **kwargs):
+        # Keep the accepted quote stable when status, contact details, or rates change.
+        if self.pk and self.original_amount is None:
+            previous = Booking.objects.only('total_amount', 'discount_amount').get(pk=self.pk)
+            self.original_amount = previous.total_amount + previous.discount_amount
         # Generate booking reference if not exists
         if not self.booking_reference:
             # Format: #BK-YEAR-ID
@@ -177,6 +181,13 @@ class Booking(models.Model):
             # Fallback default
             self.guest_type = 'international'
         
+        if self.original_amount is not None:
+            self.total_amount = (self.original_amount - self.discount_amount).quantize(Decimal('0.01'))
+            if self.total_amount < 0:
+                raise ValidationError({'discount_amount': 'Discount cannot exceed the original price.'})
+            super().save(*args, **kwargs)
+            return
+
         # Find matching PropertyPricing if not already selected
         if not self.selected_pricing and self.property:
             # Try specific guest_type first
@@ -231,6 +242,10 @@ class Booking(models.Model):
             # Fallback to base property price if no pricing found
             self.total_amount = Decimal(str(self.property.price)) * Decimal(str(self.total_days))
             
+        self.original_amount = self.total_amount
+        self.total_amount = (self.original_amount - self.discount_amount).quantize(Decimal('0.01'))
+        if self.total_amount < 0:
+            raise ValidationError({'discount_amount': 'Discount cannot exceed the original price.'})
         super().save(*args, **kwargs)
 
 

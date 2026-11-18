@@ -8,6 +8,14 @@ class BookingAdmin(admin.ModelAdmin):
     list_filter = ['status', 'accommodation_type', 'guest_type', 'stay_type', 'created_at', 'check_in']
     search_fields = ['booking_reference', 'user__email', 'property__name', 'full_name', 'email', 'id_passport_number']
     readonly_fields = ['booking_reference', 'total_days', 'total_amount', 'stay_type', 'guest_type', 'selected_pricing', 'includes_breakfast', 'includes_fullboard', 'created_at', 'updated_at']
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj)) + ['status']
+        if obj:
+            fields += ['user', 'property', 'accommodation_type', 'check_in', 'check_out',
+                       'number_of_guests', 'number_of_adults', 'number_of_children',
+                       'dog_included', 'jacuzzi_reservation']
+        return fields
     
     fieldsets = (
         ('Booking Information', {

@@ -7,7 +7,8 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 from .models import Booking
-from payment.models import Payment
+from payment.models import Payment, PaymentTransaction
+from payment.services import booking_currency
 from properties.models import Property
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -170,83 +171,85 @@ class BookingReportsView(APIView):
         })
 
 
+def payment_totals(entries):
+    totals = entries.aggregate(
+        received=Sum('amount', filter=Q(kind='receipt')),
+        refunded=Sum('amount', filter=Q(kind='refund')),
+    )
+    received = (totals['received'] or Decimal('0.00')).quantize(Decimal('0.01'))
+    refunded = (totals['refunded'] or Decimal('0.00')).quantize(Decimal('0.01'))
+    return received, refunded, received - refunded
+
+
 class PaymentReportsView(APIView):
-    """Detailed payment reports and statistics"""
+    """Report actual receipts and refunds in one currency (EUR by default)."""
     permission_classes = [IsAdminUser]
-    
+
     @swagger_auto_schema(
-        operation_description="Get detailed payment reports",
         manual_parameters=[
             openapi.Parameter('start_date', openapi.IN_QUERY, type=openapi.TYPE_STRING, format='date'),
             openapi.Parameter('end_date', openapi.IN_QUERY, type=openapi.TYPE_STRING, format='date'),
+            openapi.Parameter('currency', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Single reporting currency; defaults to the booking currency.'),
         ],
-        responses={200: 'Detailed payment reports'}
+        responses={200: 'Actual receipts, refunds, balances and monthly payment history'},
     )
     def get(self, request):
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-        
-        payments = Payment.objects.all()
-        
-        if start_date:
-            payments = payments.filter(created_at__gte=start_date)
-        if end_date:
-            payments = payments.filter(created_at__lte=end_date)
-        
-        # Payment statistics
-        total_payments = payments.count()
-        completed_payments = payments.filter(payment_status='completed').count()
-        pending_payments = payments.filter(payment_status='pending').count()
-        failed_payments = payments.filter(payment_status='failed').count()
-        
-        # Revenue by payment status
-        completed_amount = payments.filter(payment_status='completed').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        pending_amount = payments.filter(payment_status='pending').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        failed_amount = payments.filter(payment_status='failed').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        
-        # Payments by status
-        by_status = list(payments.values('payment_status').annotate(
-            count=Count('id'),
-            total_amount=Sum('amount')
-        ).order_by('-count'))
-        
-        # Payments by method
-        by_method = list(payments.values('payment_method').annotate(
-            count=Count('id'),
-            total_amount=Sum('amount')
-        ).order_by('-count'))
-        
-        # Success rate
-        success_rate = round((completed_payments / total_payments * 100), 2) if total_payments > 0 else 0
-        failure_rate = round((failed_payments / total_payments * 100), 2) if total_payments > 0 else 0
-        
-        # Monthly payment trend
-        twelve_months_ago = timezone.now() - timedelta(days=365)
-        monthly_payments = list(payments.filter(
-            created_at__gte=twelve_months_ago
-        ).annotate(
-            month=TruncMonth('created_at')
+        from rest_framework import serializers
+        currency = request.query_params.get('currency', booking_currency()).strip().upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise serializers.ValidationError({'currency': 'Supply a three-letter currency code.'})
+        payments = Payment.objects.filter(currency=currency)
+        entries = PaymentTransaction.objects.filter(currency=currency).exclude(kind='legacy')
+        filtered = False
+        for parameter, lookup in [('start_date', 'gte'), ('end_date', 'lte')]:
+            if request.query_params.get(parameter):
+                day = serializers.DateField().run_validation(request.query_params[parameter])
+                entries = entries.filter(**{f'occurred_at__date__{lookup}': day})
+                filtered = True
+        if filtered:
+            payments = payments.filter(pk__in=entries.values('payment_id'))
+        received, refunded, net = payment_totals(entries)
+        completed = payments.filter(payment_status='completed')
+        pending = payments.filter(payment_status='pending')
+        count = payments.count()
+        by_method = list(entries.values('payment_method').annotate(
+            count=Count('id', filter=Q(kind='receipt')),
+            total_amount=Sum('amount', filter=Q(kind='receipt')),
+            refunded_amount=Sum('amount', filter=Q(kind='refund')),
+        ).order_by('payment_method'))
+        for row in by_method:
+            row['total_amount'] = row['total_amount'] or Decimal('0.00')
+            row['refunded_amount'] = row['refunded_amount'] or Decimal('0.00')
+            row['net_amount'] = row['total_amount'] - row['refunded_amount']
+        monthly = list(entries.filter(occurred_at__gte=timezone.now() - timedelta(days=365)).annotate(
+            month=TruncMonth('occurred_at'),
         ).values('month').annotate(
-            payment_count=Count('id'),
-            total_amount=Sum('amount'),
-            completed_count=Count('id', filter=Q(payment_status='completed'))
+            payment_count=Count('id', filter=Q(kind='receipt')),
+            total_amount=Sum('amount', filter=Q(kind='receipt')),
+            refunded_amount=Sum('amount', filter=Q(kind='refund')),
+            completed_count=Count('payment_id', filter=Q(payment__payment_status='completed'), distinct=True),
         ).order_by('month'))
-        
+        for row in monthly:
+            row['total_amount'] = row['total_amount'] or Decimal('0.00')
+            row['refunded_amount'] = row['refunded_amount'] or Decimal('0.00')
+            row['net_amount'] = row['total_amount'] - row['refunded_amount']
         return Response({
+            'currency': currency,
             'summary': {
-                'total_payments': total_payments,
-                'completed_payments': completed_payments,
-                'pending_payments': pending_payments,
-                'failed_payments': failed_payments,
-                'completed_amount': str(completed_amount),
-                'pending_amount': str(pending_amount),
-                'failed_amount': str(failed_amount),
-                'success_rate': success_rate,
-                'failure_rate': failure_rate,
+                'total_payments': count, 'completed_payments': completed.count(),
+                'pending_payments': pending.count(),
+                'partial_payments': payments.filter(payment_status='partial').count(),
+                'refund_pending_payments': payments.filter(payment_status='refund_pending').count(),
+                'refunded_payments': payments.filter(payment_status__in=['refunded', 'partially_refunded']).count(),
+                'completed_amount': str(completed.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')),
+                'pending_amount': str(pending.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')),
+                'received_amount': str(received), 'refunded_amount': str(refunded), 'net_received': str(net),
+                'failed_payments': 0, 'failed_amount': '0.00', 'failure_rate': 0,
+                'success_rate': round(completed.count() / count * 100, 2) if count else 0,
             },
-            'by_status': by_status,
-            'by_method': by_method,
-            'monthly_trend': monthly_payments,
+            'by_status': list(payments.values('payment_status').annotate(count=Count('id'), total_amount=Sum('amount'))),
+            'by_method': by_method, 'monthly_payments': monthly,
         })
 
 
@@ -305,63 +308,48 @@ class PropertyReportsView(APIView):
 
 
 class DashboardSummaryView(APIView):
-    """Quick dashboard summary for admin overview"""
+    """Dashboard revenue is net recorded receipts, separate from quoted booking value."""
     permission_classes = [IsAdminUser]
-    
-    @swagger_auto_schema(
-        operation_description="Get dashboard summary with key metrics",
-        responses={200: 'Dashboard summary'}
-    )
+
     def get(self, request):
-        # Today's stats
-        today = timezone.now().date()
-        today_bookings = Booking.objects.filter(created_at__date=today).count()
-        today_revenue = Booking.objects.filter(created_at__date=today).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
-        
-        # This month
-        month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_bookings = Booking.objects.filter(created_at__gte=month_start).count()
-        month_revenue = Booking.objects.filter(created_at__gte=month_start).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
-        
-        # All time
-        total_bookings = Booking.objects.count()
-        total_revenue = Booking.objects.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
-        total_properties = Property.objects.count()
-        
-        # Pending actions
-        pending_bookings = Booking.objects.filter(status='pending').count()
-        pending_payments = Payment.objects.filter(payment_status='pending').count()
-        
-        # Recent bookings
-        recent_bookings = Booking.objects.select_related('property').order_by('-created_at')[:10]
-        recent_bookings_data = [{
-            'id': b.id,
-            'booking_reference': b.booking_reference,
-            'property_name': b.property.name,
-            'guest_name': b.full_name,
-            'check_in': b.check_in,
-            'total_amount': str(b.total_amount),
-            'status': b.status,
-            'created_at': b.created_at,
-        } for b in recent_bookings]
-        
+        today = timezone.localdate()
+        month_start = timezone.localtime().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        currency = booking_currency()
+        entries = PaymentTransaction.objects.filter(currency=currency).exclude(kind='legacy')
+
+        def statistics(bookings, transactions):
+            received, refunded, net = payment_totals(transactions)
+            value = (bookings.exclude(status='cancelled').aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')).quantize(Decimal('0.01'))
+            return {'bookings': bookings.count(), 'revenue': str(net), 'booking_value': str(value),
+                    'received_amount': str(received), 'refunded_amount': str(refunded)}
+
+        all_time = statistics(Booking.objects.all(), entries)
+        all_time['properties'] = Property.objects.count()
+        unpaid = Booking.objects.filter(total_amount__gt=0, status__in=['pending', 'confirmed']).filter(
+            Q(payment__isnull=True) | Q(payment__payment_status__in=['pending', 'partial'])
+        ).count()
+        recent = Booking.objects.select_related('property', 'payment').order_by('-created_at')[:10]
+        rows = []
+        for booking in recent:
+            payment = getattr(booking, 'payment', None)
+            rows.append({
+                'id': booking.pk, 'booking_reference': booking.booking_reference,
+                'property_name': booking.property.name, 'guest_name': booking.full_name,
+                'check_in': booking.check_in, 'total_amount': str(booking.total_amount),
+                'status': booking.status, 'created_at': booking.created_at,
+                'payment_status': payment.payment_status if payment else 'not_required' if booking.total_amount == 0 else 'pending',
+                'amount_paid': str(payment.amount if payment else Decimal('0.00')),
+                'remaining_amount': str(payment.remaining_amount if payment else Decimal('0.00') if booking.status == 'cancelled' else booking.total_amount),
+            })
         return Response({
-            'today': {
-                'bookings': today_bookings,
-                'revenue': str(today_revenue),
-            },
-            'this_month': {
-                'bookings': month_bookings,
-                'revenue': str(month_revenue),
-            },
-            'all_time': {
-                'bookings': total_bookings,
-                'revenue': str(total_revenue),
-                'properties': total_properties,
-            },
+            'currency': currency,
+            'today': statistics(Booking.objects.filter(created_at__date=today), entries.filter(occurred_at__date=today)),
+            'this_month': statistics(Booking.objects.filter(created_at__gte=month_start), entries.filter(occurred_at__gte=month_start)),
+            'all_time': all_time,
             'pending_actions': {
-                'pending_bookings': pending_bookings,
-                'pending_payments': pending_payments,
+                'pending_bookings': Booking.objects.filter(status='pending').count(),
+                'pending_payments': unpaid,
+                'refund_reviews': Payment.objects.filter(booking__status='cancelled', amount__gt=F('refunded_amount')).count(),
             },
-            'recent_bookings': recent_bookings_data,
+            'recent_bookings': rows,
         })

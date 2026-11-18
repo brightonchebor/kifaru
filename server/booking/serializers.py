@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Booking, BlockedDate
 from payment.serializers import PaymentSerializer
+from payment.customer_serializers import BookingPaymentFieldsMixin
 from properties.models import Property
 from datetime import datetime, timedelta
 from django.utils import timezone
@@ -23,12 +24,11 @@ class PropertyBasicSerializer(serializers.ModelSerializer):
         return None
 
 
-class BookingListSerializer(serializers.ModelSerializer):
+class BookingListSerializer(BookingPaymentFieldsMixin, serializers.ModelSerializer):
     """Simplified serializer for booking list view - less data"""
     property_name = serializers.CharField(source='property.name', read_only=True)
     property_location = serializers.CharField(source='property.location', read_only=True)
     property_image = serializers.SerializerMethodField()
-    # payment_status = serializers.SerializerMethodField()
     
     class Meta:
         model = Booking
@@ -38,7 +38,8 @@ class BookingListSerializer(serializers.ModelSerializer):
             'accommodation_type', 'guest_type', 'stay_type',
             'number_of_guests', 'number_of_adults', 'number_of_children',
             'full_name', 'email', 'phone',
-            'status', 'created_at'
+            'status', 'created_at', 'payment_id', 'payment_status', 'currency',
+            'amount_paid', 'refunded_amount', 'net_received', 'remaining_amount',
         ]
     
     def get_property_image(self, obj):
@@ -46,15 +47,6 @@ class BookingListSerializer(serializers.ModelSerializer):
             return obj.property.background_image.url
         return None
     
-    def get_payment_status(self, obj):
-        if hasattr(obj, 'payment'):
-            return obj.payment.payment_status
-        return None
-
-
-
-
-
 class BookingCreateRequestSerializer(serializers.ModelSerializer):
     """Serializer for creating bookings - only writable fields"""
     # Make personal details writable for guest bookings
@@ -519,7 +511,7 @@ class BookingCreateRequestSerializer(serializers.ModelSerializer):
         if is_authenticated:
             validated_data['user'] = user
             if not validated_data.get('full_name'):
-                validated_data['full_name'] = user.get_full_name()
+                validated_data['full_name'] = user.get_full_name
             if not validated_data.get('email'):
                 validated_data['email'] = user.email
             if not validated_data.get('phone'):
@@ -584,7 +576,7 @@ class BookingCreateRequestSerializer(serializers.ModelSerializer):
         return booking
 
 
-class BookingSerializer(serializers.ModelSerializer):
+class BookingSerializer(BookingPaymentFieldsMixin, serializers.ModelSerializer):
     """Complete serializer for reading bookings - includes all calculated fields"""
     property_details = PropertyBasicSerializer(source='property', read_only=True)
     payment = PaymentSerializer(read_only=True)
@@ -607,6 +599,8 @@ class BookingSerializer(serializers.ModelSerializer):
             'pricing_breakdown', 'promo_code_info',
             'includes_breakfast', 'includes_fullboard', 'dog_included', 'jacuzzi_reservation',
             'status', 'special_requests', 'payment',
+            'payment_id', 'payment_status', 'currency', 'amount_paid',
+            'refunded_amount', 'net_received', 'remaining_amount',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
@@ -617,6 +611,29 @@ class BookingSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'property_details', 'payment',
             'property_name', 'property_location', 'pricing_breakdown', 'promo_code_info'
         ]
+
+    def validate(self, attrs):
+        if not self.instance:
+            return attrs
+        immutable = (
+            'property', 'accommodation_type', 'guest_type', 'check_in', 'check_out',
+            'number_of_guests', 'number_of_adults', 'number_of_children',
+            'dog_included', 'jacuzzi_reservation',
+        )
+        errors = {
+            field: 'Reservation details are fixed to the accepted quote; cancel and create a new request to change them.'
+            for field in immutable if field in attrs and attrs[field] != getattr(self.instance, field)
+        }
+        requested = attrs.get('status', self.instance.status)
+        if requested != self.instance.status:
+            user = self.context['request'].user
+            admin = user.is_authenticated and (user.role == 'admin' or user.is_superuser)
+            if not (admin and self.instance.status == 'confirmed' and requested == 'completed'
+                    and self.instance.check_out <= timezone.now().date()):
+                errors['status'] = 'Confirmation follows full payment; use the cancellation endpoint to cancel. Only an admin can complete a finished stay.'
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
     def get_promo_code_info(self, obj):
         if not obj.promo_code_id:
